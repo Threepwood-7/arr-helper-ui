@@ -8,6 +8,8 @@ A toolkit for managing your Sonarr/Radarr media libraries: browse/manage Sonarr 
 
 PySide6 desktop application for browsing and managing your Sonarr library. Shows series, seasons, and episodes in a treeview with ffprobe media info (codecs, resolution, audio channels, subtitles). Supports manual/auto search, monitoring, file deletion, and adding new shows.
 
+![Sonarr UI Helper](sonarr_ui_helper_screenshot.jpg)
+
 ### 2. Media Quality Checker (`media_quality_checker.py`)
 
 CLI script that scans all downloaded files in Sonarr and Radarr for English audio streams and subtitles. Files missing required language tracks are deleted and re-downloaded automatically.
