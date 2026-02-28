@@ -1,0 +1,35 @@
+# Media Quality Checker Configuration
+
+[sonarr]
+url = "http://localhost:8989"
+api_key = "your-sonarr-api-key-here"
+enabled = true
+# http_basic_auth_username = ""
+# http_basic_auth_password = ""
+
+[radarr]
+url = "http://localhost:7878"
+api_key = "your-radarr-api-key-here"
+enabled = true
+# http_basic_auth_username = ""
+# http_basic_auth_password = ""
+
+[settings]
+# Run in dry-run mode (no actual changes)
+dry_run = false
+
+# Interactive mode - ask for confirmation and show alternatives
+interactive = true
+
+# Require English audio stream
+require_english_audio = true
+
+# Require English subtitles
+require_english_subs = true
+
+# Language codes to consider as English
+english_language_codes = ["eng", "en", "english"]
+
+# Highlight episodes missing this subtitle language (light red background in UI)
+# Leave empty or remove to disable
+# highlight_missing_subs = "eng"
