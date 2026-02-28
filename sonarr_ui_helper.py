@@ -831,12 +831,22 @@ class MainWindow(QMainWindow):
         return row
 
     def _highlight_row(self, row: list, sub_langs: str):
-        """Apply light red background if configured sub language is missing."""
+        """Apply light red background if configured sub language is missing.
+
+        highlight_missing_subs is a label that maps to english_language_codes,
+        e.g. highlight_missing_subs = "english" with
+        english_language_codes = ["eng", "en", "english"] means any of those
+        codes count as a match.
+        """
         hl = self.cfg.get('highlight_missing_subs', '').strip().lower()
         if not hl:
             return
-        langs = [l.strip().lower() for l in sub_langs.split(',') if l.strip()]
-        if hl not in langs:
+        # expand via the language codes array
+        codes = [c.lower() for c in self.cfg.get('english_language_codes', [hl])]
+        if not codes:
+            codes = [hl]
+        langs = {l.strip().lower() for l in sub_langs.split(',') if l.strip()}
+        if not langs.intersection(codes):
             bg = QColor(255, 200, 200)
             for cell in row:
                 cell.setBackground(bg)

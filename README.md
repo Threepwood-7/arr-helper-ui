@@ -1,16 +1,16 @@
 # Media Quality Checker & Sonarr UI Helper
 
-A toolkit for managing your Sonarr/Radarr media libraries: check files for English audio/subtitles, and browse/manage Sonarr series with a desktop GUI.
+A toolkit for managing your Sonarr/Radarr media libraries: browse/manage Sonarr series with a desktop GUI, and check files for English audio/subtitles.
 
 ## Tools Included
 
-### 1. Media Quality Checker (`media_quality_checker.py`)
-
-CLI script that scans all downloaded files in Sonarr and Radarr for English audio streams and subtitles. Files missing required language tracks are deleted and re-downloaded automatically.
-
-### 2. Sonarr UI Helper (`sonarr_ui_helper.py`)
+### 1. Sonarr UI Helper (`sonarr_ui_helper.py`)
 
 PySide6 desktop application for browsing and managing your Sonarr library. Shows series, seasons, and episodes in a treeview with ffprobe media info (codecs, resolution, audio channels, subtitles). Supports manual/auto search, monitoring, file deletion, and adding new shows.
+
+### 2. Media Quality Checker (`media_quality_checker.py`)
+
+CLI script that scans all downloaded files in Sonarr and Radarr for English audio streams and subtitles. Files missing required language tracks are deleted and re-downloaded automatically.
 
 ## Requirements
 
@@ -22,8 +22,8 @@ PySide6 desktop application for browsing and managing your Sonarr library. Shows
 
 ```cmd
 setup.cmd          &:: Install Python dependencies
-run_checker.cmd    &:: Run the media quality checker (CLI)
 run_ui.cmd         &:: Run the Sonarr UI helper (GUI)
+run_checker.cmd    &:: Run the media quality checker (CLI)
 ```
 
 ## Installation
@@ -69,6 +69,7 @@ interactive = true
 require_english_audio = true
 require_english_subs = true
 english_language_codes = ["eng", "en", "english"]
+# highlight_missing_subs = "english"
 ```
 
 ### Finding Your API Keys
@@ -76,22 +77,6 @@ english_language_codes = ["eng", "en", "english"]
 1. Open Sonarr/Radarr web interface
 2. Go to Settings -> General
 3. Under "Security" section, find "API Key"
-
-## Media Quality Checker
-
-### Usage
-
-```bash
-python media_quality_checker.py
-```
-
-### How It Works
-
-1. Connects to Sonarr and Radarr via their APIs
-2. Retrieves all series/movies with downloaded files
-3. Analyzes each file using ffprobe for English audio and subtitle streams
-4. Deletes files missing required language tracks
-5. Triggers automatic search to re-download better releases
 
 ### HTTP Basic Auth
 
@@ -109,8 +94,75 @@ http_basic_auth_password = "mypass"
 - `require_english_audio` - Require English audio (default: true)
 - `require_english_subs` - Require English subtitles (default: true)
 - `english_language_codes` - Language codes to consider as English
-- `highlight_missing_subs` - Highlight episodes missing this subtitle language with a light red background in the UI (e.g. `"eng"`)
+- `highlight_missing_subs` - Highlight episodes missing subtitles with a light red background in the UI. The value is a label (e.g. `"english"`) and any code from `english_language_codes` counts as a match
 - `enabled` - Enable/disable Sonarr or Radarr processing independently
+
+## Sonarr UI Helper
+
+### Usage
+
+```bash
+python sonarr_ui_helper.py
+```
+
+### Features
+
+- Tree view of all series, seasons, and episodes
+- Monitored status column (Y/N) for series, seasons, and episodes
+- ffprobe media info columns (video codec, resolution, audio codec/channels, subtitles)
+- ffprobe results cached to `z_fprobe.cache` for fast reloads
+- Configurable highlight for episodes missing subtitle languages
+- Manual search dialog with release selection
+- Auto search (trigger Sonarr automatic search)
+- Add new shows with root folder and quality profile selection
+- Monitor/unmonitor episodes
+- Delete files from disk (with or without unmonitoring)
+- Open file location in Explorer
+- Show/hide missing (undownloaded) episodes
+- Expand/collapse controls for series and seasons
+- Resizable columns with remembered widths
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| Ctrl+N | Add Show |
+| F5 | Refresh |
+| Ctrl+F5 | Clear Cache & Refresh |
+| Ctrl+Q | Quit |
+| Ctrl+E | Expand All |
+| Ctrl+Shift+E | Expand Series |
+| Ctrl+W | Collapse Seasons |
+| Ctrl+Shift+W | Collapse All |
+| Ctrl+M | Toggle Missing Episodes |
+| M | Monitor Selected |
+| S | Auto Search |
+| N | Manual Search |
+| U | Unmonitor Selected |
+| D | Delete from Disk |
+| Ctrl+Delete | Unmonitor & Delete |
+| O | Open in Explorer |
+| F1 | Keyboard Shortcuts Help |
+
+### Context Menu
+
+Right-click any item in the tree for quick access to all actions.
+
+## Media Quality Checker
+
+### Usage
+
+```bash
+python media_quality_checker.py
+```
+
+### How It Works
+
+1. Connects to Sonarr and Radarr via their APIs
+2. Retrieves all series/movies with downloaded files
+3. Analyzes each file using ffprobe for English audio and subtitle streams
+4. Deletes files missing required language tracks
+5. Triggers automatic search to re-download better releases
 
 ### Interactive Mode
 
@@ -147,13 +199,13 @@ View alternative releases? [Y/n]: y
 
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                Available Releases for: Some Show (2024)                 │
-├───┬──────────────────────────────────────────────┬─────────┬────────────┤
-│ # │ Title                                        │ Size    │ Quality    │
-├───┼──────────────────────────────────────────────┼─────────┼────────────┤
-│ 1 │ Some.Show.2024.2160p.UHD.BluRay.REMUX-GRP   │ 68.9 GB │ Remux-2160p│
-│ 2 │ Some.Show.2024.1080p.BluRay.REMUX-GRP       │ 25.3 GB │ Remux-1080p│
-│ 3 │ Some.Show.2024.1080p.BluRay.x264-GRP        │ 12.5 GB │ Bluray-1080│
-└───┴──────────────────────────────────────────────┴─────────┴────────────┘
+├───┬──────────────────────────────────────────────────────┬─────────┬────────────┤
+│ # │ Title                                                │ Size    │ Quality    │
+├───┼──────────────────────────────────────────────────────┼─────────┼────────────┤
+│ 1 │ Some.Show.2024.2160p.UHD.BluRay.REMUX-GRP           │ 68.9 GB │ Remux-2160p│
+│ 2 │ Some.Show.2024.1080p.BluRay.REMUX-GRP               │ 25.3 GB │ Remux-1080p│
+│ 3 │ Some.Show.2024.1080p.BluRay.x264-GRP                │ 12.5 GB │ Bluray-1080│
+└───┴──────────────────────────────────────────────────────┴─────────┴────────────┘
 
 Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to keep
 ```
@@ -169,53 +221,6 @@ Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to kee
 # Run every day at 3 AM
 0 3 * * * cd /path/to/script && python3 media_quality_checker.py >> /var/log/media_checker.log 2>&1
 ```
-
-## Sonarr UI Helper
-
-### Usage
-
-```bash
-python sonarr_ui_helper.py
-```
-
-### Features
-
-- Tree view of all series, seasons, and episodes
-- ffprobe media info columns (video codec, resolution, audio codec/channels, subtitles)
-- ffprobe results cached to `z_fprobe.cache` for fast reloads
-- Manual search dialog with release selection
-- Auto search (trigger Sonarr automatic search)
-- Add new shows with root folder and quality profile selection
-- Monitor/unmonitor episodes
-- Delete files from disk (with or without unmonitoring)
-- Open file location in Explorer
-- Show/hide missing (undownloaded) episodes
-- Expand/collapse controls for series and seasons
-
-### Keyboard Shortcuts
-
-| Shortcut | Action |
-|---|---|
-| Ctrl+N | Add Show |
-| F5 | Refresh |
-| Ctrl+Q | Quit |
-| Ctrl+E | Expand All |
-| Ctrl+Shift+E | Expand Series |
-| Ctrl+W | Collapse Seasons |
-| Ctrl+Shift+W | Collapse All |
-| Ctrl+M | Toggle Missing Episodes |
-| M | Monitor Selected |
-| S | Auto Search |
-| N | Manual Search |
-| U | Unmonitor Selected |
-| D | Delete from Disk |
-| Ctrl+Delete | Unmonitor & Delete |
-| O | Open in Explorer |
-| F1 | Keyboard Shortcuts Help |
-
-### Context Menu
-
-Right-click any item in the tree for quick access to all actions.
 
 ## Troubleshooting
 
@@ -238,4 +243,3 @@ ffprobe -version
 ## Warning
 
 The media quality checker will **delete and re-download** files. Always set `dry_run = true` in config.toml first to see what would happen!
-"# arr-helper-ui" 

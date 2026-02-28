@@ -30,6 +30,6 @@ require_english_subs = true
 # Language codes to consider as English
 english_language_codes = ["eng", "en", "english"]
 
-# Highlight episodes missing this subtitle language (light red background in UI)
-# Leave empty or remove to disable
-# highlight_missing_subs = "eng"
+# Highlight episodes missing subtitles (light red background in UI)
+# The value is a label; all codes from english_language_codes count as a match
+# highlight_missing_subs = "english"
