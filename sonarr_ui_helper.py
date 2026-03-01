@@ -14,14 +14,14 @@ from typing import Dict, List, Optional
 
 import requests
 import tomli
-from PySide6.QtCore import Qt, QThread, Signal, QModelIndex, QSortFilterProxyModel, QSettings
+from PySide6.QtCore import Qt, QThread, Signal, QModelIndex, QSortFilterProxyModel, QSettings, QStringListModel
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QFont, QColor, QKeySequence, QShortcut, QAction
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTreeView, QVBoxLayout, QWidget,
     QHeaderView, QMessageBox, QProgressBar, QLabel, QHBoxLayout,
     QStatusBar, QPushButton, QMenu, QDialog, QLineEdit,
     QDialogButtonBox, QAbstractItemView, QListWidget,
-    QListWidgetItem, QCheckBox, QMenuBar,
+    QListWidgetItem, QCheckBox, QMenuBar, QComboBox, QCompleter,
 )
 
 
@@ -361,25 +361,105 @@ ROLE_IS_MISSING = Qt.UserRole + 9
 ROLE_RELEASE = Qt.UserRole + 20  # stores the release dict on each row
 
 
+class _SearchFilterProxy(QSortFilterProxyModel):
+    """Filters on title text, quality, and indexer; sorts numerically via UserRole."""
+
+    def __init__(self, col_quality=2, col_indexer=3, parent=None):
+        super().__init__(parent)
+        self._quality = ''
+        self._indexer = ''
+        self._col_quality = col_quality
+        self._col_indexer = col_indexer
+
+    def set_quality(self, quality: str):
+        self._quality = quality
+        self.invalidateFilter()
+
+    def set_indexer(self, indexer: str):
+        self._indexer = indexer
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not super().filterAcceptsRow(source_row, source_parent):
+            return False
+        model = self.sourceModel()
+        if self._quality:
+            idx = model.index(source_row, self._col_quality, source_parent)
+            if (model.data(idx, Qt.DisplayRole) or '') != self._quality:
+                return False
+        if self._indexer:
+            idx = model.index(source_row, self._col_indexer, source_parent)
+            if (model.data(idx, Qt.DisplayRole) or '') != self._indexer:
+                return False
+        return True
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        lv = left.data(Qt.UserRole)
+        rv = right.data(Qt.UserRole)
+        if lv is not None and rv is not None:
+            try:
+                return float(lv) < float(rv)
+            except (TypeError, ValueError):
+                pass
+        return super().lessThan(left, right)
+
+
 class ManualSearchDialog(QDialog):
     """Shows release search results with sorting and filtering."""
 
-    def __init__(self, parent, title: str, releases: List[dict]):
+    _COL_QUALITY = 2  # index of Quality column for filtering
+    _COL_INDEXER = 3  # index of Indexer column for filtering
+
+    def __init__(self, parent, title: str, releases: List[dict], settings: QSettings = None):
         super().__init__(parent)
         self.setWindowTitle(f'Manual Search: {title}')
         self.setWindowState(Qt.WindowMaximized)
         self.selected_release = None
+        self._settings = settings
 
         layout = QVBoxLayout(self)
 
-        # filter input
+        # filter row: text filter + quality combo
+        filter_row = QHBoxLayout()
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText('Filter results…')
-        self.filter_input.textChanged.connect(self._on_filter)
-        layout.addWidget(self.filter_input)
+        self.filter_input.textChanged.connect(self._apply_filters)
+        # autocomplete from saved history
+        self._filter_history = []
+        if settings:
+            self._filter_history = settings.value('search_filter_history', []) or []
+        self._completer_model = QStringListModel(self._filter_history)
+        completer = QCompleter(self._completer_model, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self.filter_input.setCompleter(completer)
+        filter_row.addWidget(self.filter_input, 1)
+
+        filter_row.addWidget(QLabel('Quality:'))
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItem('All', '')
+        # collect unique quality names
+        qualities = sorted({
+            rel.get('quality', {}).get('quality', {}).get('name', '')
+            for rel in releases
+        } - {''})
+        for q in qualities:
+            self.quality_combo.addItem(q, q)
+        self.quality_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.quality_combo)
+
+        filter_row.addWidget(QLabel('Indexer:'))
+        self.indexer_combo = QComboBox()
+        self.indexer_combo.addItem('All', '')
+        indexers = sorted({rel.get('indexer', '') for rel in releases} - {''})
+        for ix in indexers:
+            self.indexer_combo.addItem(ix, ix)
+        self.indexer_combo.currentIndexChanged.connect(self._apply_filters)
+        filter_row.addWidget(self.indexer_combo)
+        layout.addLayout(filter_row)
 
         # source model
-        self._columns = ['Title', 'Size (GB)', 'Quality', 'Indexer', 'Seeders']
+        self._columns = ['Title', 'Size (GB)', 'Quality', 'Indexer', 'Age']
         self.source_model = QStandardItemModel()
         self.source_model.setHorizontalHeaderLabels(self._columns)
 
@@ -402,15 +482,27 @@ class ManualSearchDialog(QDialog):
             indexer_item = QStandardItem(rel.get('indexer', ''))
             indexer_item.setEditable(False)
 
-            seeders = rel.get('seeders', 0) or 0
-            seeders_item = QStandardItem()
-            seeders_item.setEditable(False)
-            seeders_item.setData(seeders, Qt.DisplayRole)
+            age_hours = rel.get('ageHours', 0) or 0
+            if age_hours:
+                age_days = age_hours / 24
+            else:
+                age_days = rel.get('age', 0) or 0
+                age_hours = age_days * 24
+            if age_hours < 1:
+                age_str = '< 1h'
+            elif age_hours < 24:
+                age_str = f'{int(age_hours)}h'
+            else:
+                age_str = f'{int(age_days)}d'
+            age_item = QStandardItem(age_str)
+            age_item.setEditable(False)
+            age_item.setData(age_hours, Qt.UserRole)
 
-            self.source_model.appendRow([title_item, size_item, quality_item, indexer_item, seeders_item])
+            self.source_model.appendRow([title_item, size_item, quality_item,
+                                         indexer_item, age_item])
 
         # proxy for sorting + filtering
-        self.proxy = QSortFilterProxyModel()
+        self.proxy = _SearchFilterProxy(self._COL_QUALITY, self._COL_INDEXER)
         self.proxy.setSourceModel(self.source_model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.proxy.setFilterKeyColumn(0)  # filter on title
@@ -423,11 +515,17 @@ class ManualSearchDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setSortingEnabled(True)
-        self.table.sortByColumn(4, Qt.DescendingOrder)  # default sort by seeders desc
+        self.table.sortByColumn(4, Qt.AscendingOrder)  # default sort by age asc (newest first)
         header = self.table.header()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col in range(1, len(self._columns)):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        saved = settings.value('search_column_widths') if settings else None
+        if saved and len(saved) == len(self._columns):
+            for col, w in enumerate(saved):
+                self.table.setColumnWidth(col, int(w))
+        else:
+            self.table.setColumnWidth(0, 800)
+            for col in range(1, len(self._columns)):
+                self.table.resizeColumnToContents(col)
         self.table.doubleClicked.connect(self._on_double_click)
 
         layout.addWidget(self.table)
@@ -437,8 +535,25 @@ class ManualSearchDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _on_filter(self, text: str):
-        self.proxy.setFilterFixedString(text)
+    def _apply_filters(self):
+        self.proxy.setFilterFixedString(self.filter_input.text())
+        self.proxy.set_quality(self.quality_combo.currentData() or '')
+        self.proxy.set_indexer(self.indexer_combo.currentData() or '')
+
+    def _save_filter_history(self):
+        text = self.filter_input.text().strip()
+        if text and self._settings:
+            if text not in self._filter_history:
+                self._filter_history.append(text)
+                # keep last 50
+                self._filter_history = self._filter_history[-50:]
+                self._settings.setValue('search_filter_history', self._filter_history)
+                self._completer_model.setStringList(self._filter_history)
+
+    def _save_column_widths(self):
+        if self._settings:
+            widths = [self.table.columnWidth(c) for c in range(len(self._columns))]
+            self._settings.setValue('search_column_widths', widths)
 
     def _get_selected_release(self) -> Optional[dict]:
         indexes = self.table.selectionModel().selectedRows()
@@ -452,13 +567,22 @@ class ManualSearchDialog(QDialog):
         rel = self._get_selected_release()
         if rel:
             self.selected_release = rel
+            self._save_filter_history()
+            self._save_column_widths()
             super().accept()
 
     def _on_ok(self):
         rel = self._get_selected_release()
         if rel:
             self.selected_release = rel
+            self._save_filter_history()
+            self._save_column_widths()
             super().accept()
+
+    def reject(self):
+        self._save_filter_history()
+        self._save_column_widths()
+        super().reject()
 
 
 # ── Add Show Dialog ───────────────────────────────────────────────
@@ -486,6 +610,32 @@ class AddShowDialog(QDialog):
         search_row.addWidget(self.search_input)
         search_row.addWidget(btn_search)
         layout.addLayout(search_row)
+
+        # root folder and quality profile selectors
+        options_row = QHBoxLayout()
+        options_row.addWidget(QLabel('Root Folder:'))
+        self.combo_root = QComboBox()
+        options_row.addWidget(self.combo_root, 1)
+        options_row.addWidget(QLabel('Quality Profile:'))
+        self.combo_qp = QComboBox()
+        options_row.addWidget(self.combo_qp, 1)
+        layout.addLayout(options_row)
+
+        # preload root folders and quality profiles
+        self._root_folders = []
+        self._quality_profiles = []
+        try:
+            self._root_folders = api.get_root_folders()
+            for rf in self._root_folders:
+                self.combo_root.addItem(rf['path'], rf['path'])
+        except Exception:
+            pass
+        try:
+            self._quality_profiles = api.get_quality_profiles()
+            for qp in self._quality_profiles:
+                self.combo_qp.addItem(qp['name'], qp['id'])
+        except Exception:
+            pass
 
         # results list
         self.results_list = QListWidget()
@@ -542,25 +692,19 @@ class AddShowDialog(QDialog):
             QMessageBox.information(self, 'Already Added', 'This series is already in Sonarr.')
             return
 
-        # get root folder and quality profile
-        try:
-            root_folders = self.api.get_root_folders()
-            quality_profiles = self.api.get_quality_profiles()
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to fetch settings:\n{e}')
+        root_path = self.combo_root.currentData()
+        qp_id = self.combo_qp.currentData()
+        if not root_path:
+            QMessageBox.critical(self, 'Error', 'No root folder selected.')
             return
-
-        if not root_folders:
-            QMessageBox.critical(self, 'Error', 'No root folders configured in Sonarr.')
-            return
-        if not quality_profiles:
-            QMessageBox.critical(self, 'Error', 'No quality profiles configured in Sonarr.')
+        if qp_id is None:
+            QMessageBox.critical(self, 'Error', 'No quality profile selected.')
             return
 
         # build the payload from lookup data with required fields
         series_data = dict(lookup)  # copy so we don't mutate
-        series_data['rootFolderPath'] = root_folders[0]['path']
-        series_data['qualityProfileId'] = quality_profiles[0]['id']
+        series_data['rootFolderPath'] = root_path
+        series_data['qualityProfileId'] = qp_id
         series_data['monitored'] = False
         series_data['seasonFolder'] = True
         series_data['addOptions'] = {'searchForMissingEpisodes': False}
@@ -611,7 +755,7 @@ class MainWindow(QMainWindow):
         btn_expand_series.clicked.connect(self._expand_series)
         btn_collapse_seasons = QPushButton('Collapse S&easons')
         btn_collapse_seasons.clicked.connect(self._collapse_all_seasons)
-        btn_collapse_series = QPushButton('&Collapse All Series')
+        btn_collapse_series = QPushButton('&Collapse Series')
         btn_collapse_series.clicked.connect(self._collapse_all_series)
         btn_add_show = QPushButton('A&dd Show')
         btn_add_show.clicked.connect(self._add_show)
@@ -639,8 +783,8 @@ class MainWindow(QMainWindow):
         self.tree.doubleClicked.connect(self._on_double_click)
 
         self.model = QStandardItemModel()
-        self._columns = ['Name', 'Size', 'Resolution', 'V.Bitrate', 'V.Codec', 'HDR',
-                         'A.Codec', 'A.Bitrate', 'Audio Lang', 'Sub Lang', 'Mon']
+        self._columns = ['Name', 'Size', 'Mon', 'Quality Profile', 'Resolution', 'V.Bitrate',
+                         'V.Codec', 'HDR', 'A.Codec', 'A.Bitrate', 'Audio Lang', 'Sub Lang']
         self.model.setHorizontalHeaderLabels(self._columns)
         self.tree.setModel(self.model)
 
@@ -664,6 +808,15 @@ class MainWindow(QMainWindow):
         # keyboard: Enter/Return to activate
         enter_shortcut = QShortcut(QKeySequence(Qt.Key_Return), self.tree)
         enter_shortcut.activated.connect(self._on_enter)
+
+        # cache quality profiles for name lookup
+        self._quality_profiles = []
+        self._qp_map = {}  # id -> name
+        try:
+            self._quality_profiles = api.get_quality_profiles()
+            self._qp_map = {p['id']: p['name'] for p in self._quality_profiles}
+        except Exception:
+            pass
 
         # start loading
         self.worker = LoadWorker(api)
@@ -726,6 +879,10 @@ class MainWindow(QMainWindow):
         act.setShortcut(QKeySequence('N'))
         act.triggered.connect(lambda: self._ctx_on_selected('manual_search'))
         actions_menu.addSeparator()
+        act = actions_menu.addAction('Change &Quality Profile')
+        act.setShortcut(QKeySequence('Q'))
+        act.triggered.connect(lambda: self._ctx_on_selected('change_quality_profile'))
+        actions_menu.addSeparator()
         act = actions_menu.addAction('&Unmonitor')
         act.setShortcut(QKeySequence('U'))
         act.triggered.connect(lambda: self._ctx_on_selected('unmonitor'))
@@ -763,6 +920,8 @@ class MainWindow(QMainWindow):
             self._ctx_auto_search(item, node_type)
         elif action_name == 'manual_search':
             self._ctx_manual_search(item, node_type)
+        elif action_name == 'change_quality_profile':
+            self._ctx_change_quality_profile(item)
         elif action_name == 'unmonitor':
             self._ctx_unmonitor(item, node_type)
         elif action_name == 'delete_from_disk':
@@ -777,6 +936,7 @@ class MainWindow(QMainWindow):
             "<tr><td><b>General</b></td><td></td></tr>"
             "<tr><td><code>F1</code></td><td>Show this help</td></tr>"
             "<tr><td><code>F5</code></td><td>Refresh data from Sonarr</td></tr>"
+            "<tr><td><code>Ctrl+F5</code></td><td>Clear cache &amp; refresh</td></tr>"
             "<tr><td><code>Ctrl+N</code></td><td>Add a new show</td></tr>"
             "<tr><td><code>Ctrl+Q</code></td><td>Quit</td></tr>"
             "<tr><td></td><td></td></tr>"
@@ -797,6 +957,7 @@ class MainWindow(QMainWindow):
             "<tr><td><code>M</code></td><td>Monitor</td></tr>"
             "<tr><td><code>S</code></td><td>Auto Search</td></tr>"
             "<tr><td><code>N</code></td><td>Manual Search</td></tr>"
+            "<tr><td><code>Q</code></td><td>Change Quality Profile (series only)</td></tr>"
             "<tr><td><code>U</code></td><td>Unmonitor</td></tr>"
             "<tr><td><code>D</code></td><td>Delete from disk (keep monitoring)</td></tr>"
             "<tr><td><code>Ctrl+Delete</code></td><td>Unmonitor &amp; Delete from disk</td></tr>"
@@ -805,7 +966,7 @@ class MainWindow(QMainWindow):
             "<tr><td><code>Alt+X</code></td><td>Expand All</td></tr>"
             "<tr><td><code>Alt+S</code></td><td>Expand Series</td></tr>"
             "<tr><td><code>Alt+E</code></td><td>Collapse Seasons</td></tr>"
-            "<tr><td><code>Alt+C</code></td><td>Collapse All Series</td></tr>"
+            "<tr><td><code>Alt+C</code></td><td>Collapse Series</td></tr>"
             "<tr><td><code>Alt+M</code></td><td>Show Missing checkbox</td></tr>"
             "<tr><td><code>Alt+D</code></td><td>Add Show</td></tr>"
             "<tr><td><code>Alt+R</code></td><td>Refresh</td></tr>"
@@ -877,7 +1038,9 @@ class MainWindow(QMainWindow):
             series_row = self._make_row(len(self._columns))
             series_row[0] = series_item
             series_row[1].setText(fmt_size(s['total_size']))
-            series_row[10].setText('Y' if s['series_data'].get('monitored', False) else 'N')
+            series_row[2].setText('Y' if s['series_data'].get('monitored', False) else 'N')
+            qp_id = s['series_data'].get('qualityProfileId', 0)
+            series_row[3].setText(self._qp_map.get(qp_id, str(qp_id)))
 
             all_season_nums = s['all_season_nums']
             downloaded_seasons = s['seasons']
@@ -922,7 +1085,7 @@ class MainWindow(QMainWindow):
                 season_row[0] = season_item
                 if season_size > 0:
                     season_row[1].setText(fmt_size(season_size))
-                season_row[10].setText('Y' if season_monitored else 'N')
+                season_row[2].setText('Y' if season_monitored else 'N')
 
                 # downloaded episodes
                 for ep in downloaded_eps:
@@ -940,16 +1103,16 @@ class MainWindow(QMainWindow):
                     ep_row = self._make_row(len(self._columns))
                     ep_row[0] = ep_item
                     ep_row[1].setText(fmt_size(ep['size_bytes']))
-                    ep_row[2].setText(ep['video_resolution'])
-                    ep_row[3].setText(ep['video_bitrate'])
-                    ep_row[4].setText(ep['video_codec'])
-                    ep_row[5].setText(ep['hdr'])
-                    ep_row[6].setText(ep['audio_codec'])
-                    ep_row[7].setText(ep['audio_bitrate'])
-                    ep_row[8].setText(ep['audio_langs'])
-                    ep_row[9].setText(ep['sub_langs'])
                     ep_monitored = any(e.get('monitored', False) for e in ep.get('episode_data', []))
-                    ep_row[10].setText('Y' if ep_monitored else 'N')
+                    ep_row[2].setText('Y' if ep_monitored else 'N')
+                    ep_row[4].setText(ep['video_resolution'])
+                    ep_row[5].setText(ep['video_bitrate'])
+                    ep_row[6].setText(ep['video_codec'])
+                    ep_row[7].setText(ep['hdr'])
+                    ep_row[8].setText(ep['audio_codec'])
+                    ep_row[9].setText(ep['audio_bitrate'])
+                    ep_row[10].setText(ep['audio_langs'])
+                    ep_row[11].setText(ep['sub_langs'])
                     self._highlight_row(ep_row, ep['sub_langs'])
 
                     season_item.appendRow(ep_row)
@@ -971,7 +1134,7 @@ class MainWindow(QMainWindow):
 
                     ep_row = self._make_row(len(self._columns))
                     ep_row[0] = ep_item
-                    ep_row[10].setText('Y' if monitored else 'N')
+                    ep_row[2].setText('Y' if monitored else 'N')
 
                     season_item.appendRow(ep_row)
 
@@ -1099,6 +1262,9 @@ class MainWindow(QMainWindow):
         act_auto_search = menu.addAction('Auto Search')
         act_manual_search = menu.addAction('Manual Search')
         menu.addSeparator()
+        act_change_qp = menu.addAction('Change Quality Profile')
+        act_change_qp.setEnabled(node_type == 'series')
+        menu.addSeparator()
         act_unmonitor = menu.addAction('Unmonitor')
         act_delete_disk = menu.addAction('Delete From Disk')
         act_unmonitor_delete = menu.addAction('Unmonitor && Delete From Disk')
@@ -1113,6 +1279,8 @@ class MainWindow(QMainWindow):
             self._ctx_auto_search(item, node_type)
         elif action == act_manual_search:
             self._ctx_manual_search(item, node_type)
+        elif action == act_change_qp:
+            self._ctx_change_quality_profile(item)
         elif action == act_unmonitor:
             self._ctx_unmonitor(item, node_type)
         elif action == act_delete_disk:
@@ -1322,6 +1490,63 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed:\n{e}')
 
+    def _ctx_change_quality_profile(self, item: QStandardItem):
+        """Change quality profile for a series via a combo-box dialog."""
+        node_type = item.data(ROLE_NODE_TYPE)
+        if node_type != 'series':
+            self.status_label.setText('Quality profile can only be changed on a series')
+            return
+
+        series_id = item.data(ROLE_SERIES_ID)
+        if not self._quality_profiles:
+            QMessageBox.critical(self, 'Error', 'No quality profiles available.')
+            return
+
+        try:
+            series_data = self.api.get_series_by_id(series_id)
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to fetch series:\n{e}')
+            return
+
+        current_qp_id = series_data.get('qualityProfileId', 0)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle('Change Quality Profile')
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(f'Quality profile for: {item.text()}'))
+        combo = QComboBox()
+        current_idx = 0
+        for i, p in enumerate(self._quality_profiles):
+            combo.addItem(p['name'], p['id'])
+            if p['id'] == current_qp_id:
+                current_idx = i
+        combo.setCurrentIndex(current_idx)
+        lay.addWidget(combo)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        new_qp_id = combo.currentData()
+        if new_qp_id == current_qp_id:
+            return
+
+        try:
+            series_data['qualityProfileId'] = new_qp_id
+            self.api.update_series(series_data)
+            # update the tree cell
+            row_idx = item.index().row()
+            parent = item.parent() or self.model.invisibleRootItem()
+            qp_item = parent.child(row_idx, 3)
+            if qp_item:
+                qp_item.setText(combo.currentText())
+            self.status_label.setText(f'Quality profile changed to {combo.currentText()} for {item.text()}')
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to update quality profile:\n{e}')
+
     def _ctx_unmonitor_delete(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
         label = item.text()
@@ -1486,7 +1711,8 @@ class MainWindow(QMainWindow):
 
     def _add_show(self):
         dlg = AddShowDialog(self, self.api)
-        dlg.exec()
+        if dlg.exec() == QDialog.Accepted and dlg.added_series:
+            self._refresh()
 
     def closeEvent(self, event):
         """Save column widths before closing."""
