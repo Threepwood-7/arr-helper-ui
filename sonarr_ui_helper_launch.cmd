@@ -1,3 +1,5 @@
-@echo off
-cd /d "%~dp0"
-START "" pythonw.exe sonarr_ui_helper.py %*
+@ECHO OFF
+
+CD /D %~dp0
+
+START "" PYTHONW.EXE sonarr_ui_helper.py
