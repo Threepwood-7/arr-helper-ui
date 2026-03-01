@@ -246,3 +246,9 @@ ffprobe -version
 ## Warning
 
 The media quality checker will **delete and re-download** files. Always set `dry_run = true` in config.toml first to see what would happen!
+
+---
+
+### Tags
+
+sonarr, sonarr ui, sonarr gui, sonarr qt, sonarr qt ui, sonarr pyside6, sonarr desktop app, sonarr desktop client, sonarr manager, sonarr episode manager, sonarr series browser, sonarr treeview, radarr, radarr ui, media quality checker, media language checker, english audio checker, english subtitle checker, ffprobe, ffmpeg, pyside6, qt6, sonarr api, radarr api, sonarr tool, sonarr utility, sonarr helper, media library manager, tv show manager, episode browser, sonarr search, sonarr monitor, sonarr delete, sonarr file manager
