@@ -23,10 +23,11 @@ class Config:
     """Load and manage configuration from TOML file"""
     
     def __init__(self, config_path: str = 'config.toml'):
-        self.config_path = config_path
+        self._script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.config_path = os.path.join(self._script_dir, config_path) if not os.path.isabs(config_path) else config_path
         self.config = self._load_config()
-        self.user_cache_path = 'z_user.cache'
-        self.files_cache_path = 'z_files.cache'
+        self.user_cache_path = os.path.join(self._script_dir, 'z_user.cache')
+        self.files_cache_path = os.path.join(self._script_dir, 'z_files.cache')
     
     def _load_config(self) -> Dict:
         """Load configuration from TOML file"""
@@ -82,19 +83,25 @@ class Config:
             print(f"Warning: Could not save files cache: {e}")
     
     def _create_example_config(self):
-        """Create an example config file"""
-        example_config = """# Media Quality Checker Configuration
+        """Create an example config file by copying config.example.toml."""
+        example_path = os.path.join(self._script_dir, 'config.example.toml')
+        try:
+            if os.path.exists(example_path):
+                import shutil
+                shutil.copy2(example_path, self.config_path)
+            else:
+                example_config = """# Media Quality Checker Configuration
 
 [sonarr]
 url = "http://localhost:8989"
-api_key = "your_sonarr_api_key_here"
+api_key = "your-sonarr-api-key-here"
 enabled = true
 # http_basic_auth_username = ""
 # http_basic_auth_password = ""
 
 [radarr]
 url = "http://localhost:7878"
-api_key = "your_radarr_api_key_here"
+api_key = "your-radarr-api-key-here"
 enabled = true
 # http_basic_auth_username = ""
 # http_basic_auth_password = ""
@@ -104,7 +111,7 @@ enabled = true
 dry_run = false
 
 # Interactive mode - ask for confirmation and show alternatives
-interactive = false
+interactive = true
 
 # Require English audio stream
 require_english_audio = true
@@ -114,10 +121,13 @@ require_english_subs = true
 
 # Language codes to consider as English
 english_language_codes = ["eng", "en", "english"]
+
+# Highlight episodes missing subtitles (light red background in UI)
+# The value is a label; all codes from english_language_codes count as a match
+# highlight_missing_subs = "english"
 """
-        try:
-            with open(self.config_path, 'w') as f:
-                f.write(example_config)
+                with open(self.config_path, 'w') as f:
+                    f.write(example_config)
             print(f"Created example config at: {self.config_path}")
             print("Please edit this file with your Sonarr/Radarr settings.")
         except Exception as e:
@@ -164,11 +174,23 @@ class MediaQualityChecker:
         # Load caches
         self.user_cache = config.load_user_cache() if config else {}
         self.files_cache = config.load_files_cache() if config else {}
-        
-        # Track new additions during this session
-        self.skipped_files = set()  # Track files user chose to skip this session
-        self.good_files_added = set()  # Track files verified as good this session
+
+        # Build sets for O(1) lookups (JSON stores lists, we use sets in memory)
+        self._good_files_set = set(self.files_cache.get('good_files', []))
+        self._skipped_files_set = set(self.user_cache.get('skipped_files', []))
     
+    def _add_good_file(self, file_path: str):
+        """Add a file to the good files cache."""
+        if file_path not in self._good_files_set:
+            self._good_files_set.add(file_path)
+            self.files_cache.setdefault('good_files', []).append(file_path)
+
+    def _add_skipped_file(self, file_path: str):
+        """Add a file to the skipped files cache."""
+        if file_path not in self._skipped_files_set:
+            self._skipped_files_set.add(file_path)
+            self.user_cache.setdefault('skipped_files', []).append(file_path)
+
     def save_caches(self):
         """Save user cache and files cache to disk"""
         if self.config:
@@ -414,10 +436,7 @@ class MediaQualityChecker:
                     return None  # Keep current
                 elif choice == 0:
                     # Skip and remember permanently
-                    if 'skipped_files' not in self.user_cache:
-                        self.user_cache['skipped_files'] = []
-                    self.user_cache['skipped_files'].append(file_path)
-                    self.skipped_files.add(file_path)
+                    self._add_skipped_file(file_path)
                     self.save_caches()
                     self.console.print(f"[yellow]Marked to skip permanently[/yellow]")
                     return None
@@ -517,41 +536,41 @@ class MediaQualityChecker:
                     continue
                 
                 # Check if file is already in good files cache
-                if file_path in self.files_cache.get('good_files', []):
+                if file_path in self._good_files_set:
                     if self.interactive:
                         self.console.print(f"[dim]Skipping (already verified as OK): {Path(file_path).name}[/dim]")
                     continue
-                
+
                 # Check for English streams
                 has_eng_audio, has_eng_subs = self.check_file_streams(file_path)
-                
+
                 if self.should_redownload(has_eng_audio, has_eng_subs):
                     filename = Path(file_path).name
-                    
+
                     # Check if this file was previously skipped BEFORE showing anything
-                    if file_path in self.user_cache.get('skipped_files', []):
+                    if file_path in self._skipped_files_set:
                         if self.interactive:
                             self.console.print(f"[dim]Skipping (previously marked to skip): {filename}[/dim]")
                         continue
-                    
+
                     if self.interactive:
                         # Interactive mode - show details and ask for confirmation
                         self.console.print(f"\n[red]X Issue found:[/red] {filename}")
                         self.console.print(f"  [yellow]English audio:[/yellow] {'YES' if has_eng_audio else 'NO'}")
                         self.console.print(f"  [yellow]English subs:[/yellow] {'YES' if has_eng_subs else 'NO'}")
-                        
+
                         # Get episode IDs for this file
                         episode_ids = self.get_episodes_for_file(series_id, file_id)
-                        
+
                         if episode_ids:
                             # Ask user what to do (default is No when pressing Enter)
                             view_alternatives = Confirm.ask("\n[bold cyan]View alternative releases?[/bold cyan]", default=False)
-                            
+
                             if view_alternatives:
                                 # Get releases for the first episode (they should be the same for multi-episode files)
                                 releases = self.get_episode_releases(episode_ids[0], quality_profile_id)
                                 selected_release = self.display_releases_and_select(releases, filename, file_path)
-                                
+
                                 if selected_release and not dry_run:
                                     # Delete current file
                                     self.console.print("[yellow]Deleting current file...[/yellow]")
@@ -561,7 +580,7 @@ class MediaQualityChecker:
                                         f'episodefile/{file_id}',
                                         method='DELETE'
                                     )
-                                    
+
                                     # Download selected release
                                     self.download_release(
                                         self.sonarr_url,
@@ -573,10 +592,7 @@ class MediaQualityChecker:
                                     self.console.print("[dim]DRY RUN: Would download selected release[/dim]")
                             else:
                                 # User said No - save to cache to skip this file next time
-                                if 'skipped_files' not in self.user_cache:
-                                    self.user_cache['skipped_files'] = []
-                                if file_path not in self.user_cache['skipped_files']:
-                                    self.user_cache['skipped_files'].append(file_path)
+                                self._add_skipped_file(file_path)
                                 self.save_caches()
                                 self.console.print(f"[yellow]Marked to skip permanently[/yellow]")
                         else:
@@ -585,7 +601,7 @@ class MediaQualityChecker:
                         # Non-interactive mode - original behavior
                         print(f"  X {filename}")
                         print(f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}")
-                        
+
                         if not dry_run:
                             # Delete the episode file to trigger re-download
                             print(f"     Deleting file to trigger re-download...")
@@ -595,7 +611,7 @@ class MediaQualityChecker:
                                 f'episodefile/{file_id}',
                                 method='DELETE'
                             )
-                            
+
                             # Trigger search for the episodes
                             episode_ids = self.get_episodes_for_file(series_id, file_id)
                             if episode_ids:
@@ -611,13 +627,9 @@ class MediaQualityChecker:
                             print(f"     [DRY RUN] Would delete and re-download")
                 else:
                     # File is OK - add to cache
-                    if 'good_files' not in self.files_cache:
-                        self.files_cache['good_files'] = []
-                    if file_path not in self.files_cache['good_files']:
-                        self.files_cache['good_files'].append(file_path)
-                        self.good_files_added.add(file_path)
-                        self.save_caches()
-                    
+                    self._add_good_file(file_path)
+                    self.save_caches()
+
                     if self.interactive:
                         self.console.print(f"[green]OK[/green] {Path(file_path).name}")
                     else:
@@ -660,38 +672,38 @@ class MediaQualityChecker:
                 continue
             
             # Check if file is already in good files cache
-            if file_path in self.files_cache.get('good_files', []):
+            if file_path in self._good_files_set:
                 if self.interactive:
                     self.console.print(f"[dim]Skipping (already verified as OK): {movie_title}[/dim]")
                 continue
-            
+
             # Check for English streams
             has_eng_audio, has_eng_subs = self.check_file_streams(file_path)
-            
+
             if self.should_redownload(has_eng_audio, has_eng_subs):
                 filename = Path(file_path).name
-                
+
                 # Check if this file was previously skipped BEFORE showing anything
-                if file_path in self.user_cache.get('skipped_files', []):
+                if file_path in self._skipped_files_set:
                     if self.interactive:
                         self.console.print(f"[dim]Skipping (previously marked to skip): {movie_title}[/dim]")
                     continue
-                
+
                 if self.interactive:
                     # Interactive mode - show details and ask for confirmation
                     self.console.print(f"\n[red]X Issue found:[/red] {movie_title}")
                     self.console.print(f"  [dim]File:[/dim] {filename}")
                     self.console.print(f"  [yellow]English audio:[/yellow] {'YES' if has_eng_audio else 'NO'}")
                     self.console.print(f"  [yellow]English subs:[/yellow] {'YES' if has_eng_subs else 'NO'}")
-                    
+
                     # Ask user what to do (default is No when pressing Enter)
                     view_alternatives = Confirm.ask("\n[bold cyan]View alternative releases?[/bold cyan]", default=False)
-                    
+
                     if view_alternatives:
                         # Get releases
                         releases = self.get_movie_releases(movie_id, quality_profile_id)
                         selected_release = self.display_releases_and_select(releases, movie_title, file_path)
-                        
+
                         if selected_release and not dry_run:
                             # Delete current file
                             self.console.print("[yellow]Deleting current file...[/yellow]")
@@ -701,7 +713,7 @@ class MediaQualityChecker:
                                 f'moviefile/{file_id}',
                                 method='DELETE'
                             )
-                            
+
                             # Download selected release
                             self.download_release(
                                 self.radarr_url,
@@ -713,10 +725,7 @@ class MediaQualityChecker:
                             self.console.print("[dim]DRY RUN: Would download selected release[/dim]")
                     else:
                         # User said No - save to cache to skip this file next time
-                        if 'skipped_files' not in self.user_cache:
-                            self.user_cache['skipped_files'] = []
-                        if file_path not in self.user_cache['skipped_files']:
-                            self.user_cache['skipped_files'].append(file_path)
+                        self._add_skipped_file(file_path)
                         self.save_caches()
                         self.console.print(f"[yellow]Marked to skip permanently[/yellow]")
                 else:
@@ -724,7 +733,7 @@ class MediaQualityChecker:
                     print(f"  X {movie_title}")
                     print(f"     File: {filename}")
                     print(f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}")
-                    
+
                     if not dry_run:
                         # Delete the movie file to trigger re-download
                         print(f"     Deleting file to trigger re-download...")
@@ -734,7 +743,7 @@ class MediaQualityChecker:
                             f'moviefile/{file_id}',
                             method='DELETE'
                         )
-                        
+
                         # Trigger movie search
                         print(f"     Triggering movie search...")
                         self._make_request(
@@ -748,13 +757,9 @@ class MediaQualityChecker:
                         print(f"     [DRY RUN] Would delete and re-download")
             else:
                 # File is OK - add to cache
-                if 'good_files' not in self.files_cache:
-                    self.files_cache['good_files'] = []
-                if file_path not in self.files_cache['good_files']:
-                    self.files_cache['good_files'].append(file_path)
-                    self.good_files_added.add(file_path)
-                    self.save_caches()
-                
+                self._add_good_file(file_path)
+                self.save_caches()
+
                 if self.interactive:
                     self.console.print(f"[green]OK[/green] {movie_title}")
                 else:
@@ -810,29 +815,27 @@ def main():
     )
     
     if interactive:
-        console = Console()
         if dry_run:
-            console.print(Panel(
+            checker.console.print(Panel(
                 "[bold yellow]DRY RUN MODE[/bold yellow] - No changes will be made",
                 box=box.DOUBLE
             ))
         else:
-            console.print("")
+            checker.console.print("")
     else:
         if dry_run:
             print("=== DRY RUN MODE - No changes will be made ===\n")
-    
+
     # Process Sonarr if enabled
     if sonarr_config:
         checker.process_sonarr(dry_run)
-    
+
     # Process Radarr if enabled
     if radarr_config:
         checker.process_radarr(dry_run)
-    
+
     if interactive:
-        console = Console()
-        console.print(Panel("[bold green]Complete[/bold green]", box=box.DOUBLE))
+        checker.console.print(Panel("[bold green]Complete[/bold green]", box=box.DOUBLE))
     else:
         print("\n=== Complete ===")
 

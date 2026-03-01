@@ -16,7 +16,7 @@ CLI script that scans all downloaded files in Sonarr and Radarr for English audi
 
 ## Requirements
 
-- Python 3.6+
+- Python 3.9+
 - ffmpeg/ffprobe installed and in PATH
 - Sonarr and/or Radarr instances with API access
 
@@ -141,7 +141,8 @@ python sonarr_ui_helper.py
 | S | Auto Search |
 | N | Manual Search |
 | U | Unmonitor Selected |
-| D | Delete from Disk |
+| D | Delete files from Disk (keep in Sonarr) |
+| Delete | Remove series/season from Sonarr (deletes files) |
 | Ctrl+Delete | Unmonitor & Delete |
 | O | Open in Explorer |
 | F1 | Keyboard Shortcuts Help |

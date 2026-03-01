@@ -7,6 +7,7 @@ Uses ffprobe for media info and shares config with media_quality_checker.
 import os
 import sys
 import json
+import platform
 import subprocess
 import shutil
 from pathlib import Path
@@ -216,6 +217,17 @@ def probe_file(file_path: str) -> Dict:
     _probe_cache[file_path] = info
     _save_probe_cache()
     return info
+
+
+def _open_path(path: str):
+    """Open a file or directory with the system default handler (cross-platform)."""
+    system = platform.system()
+    if system == 'Windows':
+        os.startfile(path)
+    elif system == 'Darwin':
+        subprocess.Popen(['open', path])
+    else:
+        subprocess.Popen(['xdg-open', path])
 
 
 def fmt_size(size_bytes: int) -> str:
@@ -841,7 +853,7 @@ class MainWindow(QMainWindow):
         act.setShortcut(QKeySequence('Ctrl+F5'))
         act.triggered.connect(self._clear_cache_and_refresh)
         file_menu.addSeparator()
-        act = file_menu.addAction('&Quit')
+        act = file_menu.addAction('E&xit')
         act.setShortcut(QKeySequence('Ctrl+Q'))
         act.triggered.connect(self.close)
 
@@ -943,7 +955,7 @@ class MainWindow(QMainWindow):
             "<tr><td><b>Navigation</b></td><td></td></tr>"
             "<tr><td><code>Enter</code></td><td>Open file/folder in Explorer</td></tr>"
             "<tr><td><code>O</code></td><td>Open in Explorer</td></tr>"
-            "<tr><td><code>Delete</code></td><td>Delete series or season</td></tr>"
+            "<tr><td><code>Delete</code></td><td>Remove series/season from Sonarr (deletes files)</td></tr>"
             "<tr><td><code>Double-click</code></td><td>Open file/folder</td></tr>"
             "<tr><td></td><td></td></tr>"
             "<tr><td><b>View</b></td><td></td></tr>"
@@ -959,7 +971,7 @@ class MainWindow(QMainWindow):
             "<tr><td><code>N</code></td><td>Manual Search</td></tr>"
             "<tr><td><code>Q</code></td><td>Change Quality Profile (series only)</td></tr>"
             "<tr><td><code>U</code></td><td>Unmonitor</td></tr>"
-            "<tr><td><code>D</code></td><td>Delete from disk (keep monitoring)</td></tr>"
+            "<tr><td><code>D</code></td><td>Delete files from disk (keep in Sonarr)</td></tr>"
             "<tr><td><code>Ctrl+Delete</code></td><td>Unmonitor &amp; Delete from disk</td></tr>"
             "<tr><td></td><td></td></tr>"
             "<tr><td><b>Toolbar Mnemonics (Alt+key)</b></td><td></td></tr>"
@@ -1413,7 +1425,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText('No releases found')
             return
 
-        dlg = ManualSearchDialog(self, item.text(), releases)
+        dlg = ManualSearchDialog(self, item.text(), releases, settings=self._settings)
         if dlg.exec() == QDialog.Accepted and dlg.selected_release:
             rel = dlg.selected_release
             try:
@@ -1659,19 +1671,19 @@ class MainWindow(QMainWindow):
         if node_type == 'series':
             path = item.data(ROLE_SERIES_PATH)
             if path and os.path.isdir(path):
-                os.startfile(path)
+                _open_path(path)
             else:
                 self.status_label.setText(f'Directory not found: {path}')
         elif node_type == 'season':
             path = item.data(ROLE_SEASON_PATH)
             if path and os.path.isdir(path):
-                os.startfile(path)
+                _open_path(path)
             else:
                 self.status_label.setText(f'Directory not found: {path}')
         elif node_type == 'episode':
             path = item.data(ROLE_FILE_PATH)
             if path and os.path.isfile(path):
-                os.startfile(path)
+                _open_path(path)
             else:
                 self.status_label.setText(f'File not found: {path}')
 
@@ -1730,6 +1742,8 @@ class MainWindow(QMainWindow):
 
     def _refresh(self):
         """Reload all data from Sonarr."""
+        if self.worker.isRunning():
+            self.worker.wait()
         self.model.removeRows(0, self.model.rowCount())
         self.progress_bar.show()
         self.progress_bar.setRange(0, 0)
@@ -1744,6 +1758,20 @@ class MainWindow(QMainWindow):
 
 def main():
     _load_probe_cache()
+
+    # check ffprobe availability
+    try:
+        subprocess.run(['ffprobe', '-version'], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # show GUI error if possible, otherwise print
+        app = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(
+            None, 'ffprobe not found',
+            'ffprobe is required but was not found in PATH.\n\n'
+            'Please install ffmpeg/ffprobe and try again.\n'
+            'https://ffmpeg.org/download.html',
+        )
+        sys.exit(1)
 
     # load config (same as media_quality_checker)
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.toml')
@@ -1765,7 +1793,7 @@ def main():
         http_pass=sonarr.get('http_basic_auth_password', ''),
     )
 
-    app = QApplication(sys.argv)
+    app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle('Fusion')
     win = MainWindow(api, settings=config.get('settings', {}))
     win.showMaximized()
