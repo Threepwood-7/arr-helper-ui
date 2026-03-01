@@ -21,6 +21,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Done!
-
 git push
+
+echo Done!
