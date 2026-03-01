@@ -48,7 +48,7 @@ brew install ffmpeg
 
 ## Configuration
 
-Both tools share a `config.toml` file. Copy `config.example.toml` to `config.toml` and edit it:
+Both tools share a `config.toml` file. Copy `config_example.toml` to `config.toml` and edit it:
 
 ```toml
 [sonarr]
