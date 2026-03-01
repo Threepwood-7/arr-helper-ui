@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from pathlib import Path
 import tomli
+from ffprobe_utils import find_ffprobe
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Confirm, IntPrompt
@@ -157,7 +158,8 @@ class MediaQualityChecker:
                  require_audio: bool = True, require_subs: bool = True,
                  english_codes: List[str] = None, interactive: bool = False,
                  config: 'Config' = None,
-                 sonarr_http_auth: tuple = None, radarr_http_auth: tuple = None):
+                 sonarr_http_auth: tuple = None, radarr_http_auth: tuple = None,
+                 ffprobe_path: str = 'ffprobe'):
         self.sonarr_url = sonarr_url.rstrip('/')
         self.sonarr_api = sonarr_api
         self.radarr_url = radarr_url.rstrip('/')
@@ -170,6 +172,7 @@ class MediaQualityChecker:
         self.interactive = interactive
         self.console = Console()
         self.config = config
+        self.ffprobe_path = ffprobe_path
         
         # Load caches
         self.user_cache = config.load_user_cache() if config else {}
@@ -231,7 +234,7 @@ class MediaQualityChecker:
         try:
             # Run ffprobe to get stream information
             cmd = [
-                'ffprobe',
+                self.ffprobe_path,
                 '-v', 'quiet',
                 '-print_format', 'json',
                 '-show_streams',
@@ -771,10 +774,10 @@ def main():
     config = Config('config.toml')
     
     # Check if ffprobe is available
-    try:
-        subprocess.run(['ffprobe', '-version'], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Error: ffprobe not found. Please install ffmpeg/ffprobe.")
+    ffprobe_path = find_ffprobe()
+    if not ffprobe_path:
+        print("Error: ffprobe not found in PATH or common install locations.")
+        print("Please install ffmpeg/ffprobe: https://ffmpeg.org/download.html")
         sys.exit(1)
     
     # Get settings
@@ -812,6 +815,7 @@ def main():
         config=config,
         sonarr_http_auth=_http_auth(sonarr_config),
         radarr_http_auth=_http_auth(radarr_config),
+        ffprobe_path=ffprobe_path,
     )
     
     if interactive:

@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 
 import requests
 import tomli
+from ffprobe_utils import find_ffprobe
 from PySide6.QtCore import Qt, QThread, Signal, QModelIndex, QSortFilterProxyModel, QSettings, QStringListModel
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QFont, QColor, QKeySequence, QShortcut, QAction
 from PySide6.QtWidgets import (
@@ -114,6 +115,7 @@ class SonarrAPI:
 
 # ── ffprobe cache & helper ──────────────────────────────────────────
 
+_FFPROBE: str | None = None          # resolved at startup in main()
 _PROBE_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'z_fprobe.cache')
 _probe_cache: Dict = {}
 
@@ -161,7 +163,7 @@ def probe_file(file_path: str) -> Dict:
 
     try:
         cmd = [
-            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            _FFPROBE or 'ffprobe', '-v', 'quiet', '-print_format', 'json',
             '-show_streams', '-show_format', file_path,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -1760,14 +1762,14 @@ def main():
     _load_probe_cache()
 
     # check ffprobe availability
-    try:
-        subprocess.run(['ffprobe', '-version'], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        # show GUI error if possible, otherwise print
+    global _FFPROBE
+    _FFPROBE = find_ffprobe()
+    if not _FFPROBE:
         app = QApplication.instance() or QApplication(sys.argv)
         QMessageBox.critical(
             None, 'ffprobe not found',
-            'ffprobe is required but was not found in PATH.\n\n'
+            'ffprobe is required but was not found in PATH or\n'
+            'common installation locations.\n\n'
             'Please install ffmpeg/ffprobe and try again.\n'
             'https://ffmpeg.org/download.html',
         )
