@@ -3,6 +3,7 @@
 import os
 import platform
 import shutil
+import subprocess
 
 
 def find_ffprobe() -> str | None:
@@ -20,6 +21,24 @@ def find_ffprobe() -> str | None:
                 return path
 
     return None
+
+
+def ffprobe_subprocess_kwargs() -> dict:
+    """Return subprocess kwargs to keep ffprobe hidden on Windows."""
+    if platform.system() != 'Windows':
+        return {}
+
+    kwargs = {}
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = getattr(subprocess, 'SW_HIDE', 0)
+        kwargs['startupinfo'] = startupinfo
+    except Exception:
+        pass
+
+    kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+    return kwargs
 
 
 def _windows_candidates() -> list[str]:

@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from pathlib import Path
 import tomli
-from ffprobe_utils import find_ffprobe
+from ffprobe_utils import find_ffprobe, ffprobe_subprocess_kwargs
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Confirm, IntPrompt
@@ -241,7 +241,13 @@ class MediaQualityChecker:
                 file_path
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                **ffprobe_subprocess_kwargs(),
+            )
 
             if result.returncode != 0:
                 print(f"ffprobe error for {file_path}: {result.stderr}")

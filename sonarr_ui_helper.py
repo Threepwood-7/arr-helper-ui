@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 import requests
 import tomli
-from ffprobe_utils import find_ffprobe
+from ffprobe_utils import find_ffprobe, ffprobe_subprocess_kwargs
 from PySide6.QtCore import Qt, QThread, Signal, QModelIndex, QSortFilterProxyModel, QSettings, QStringListModel
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QFont, QColor, QKeySequence, QShortcut, QAction
 from PySide6.QtWidgets import (
@@ -166,7 +166,13 @@ def probe_file(file_path: str) -> Dict:
             _FFPROBE or 'ffprobe', '-v', 'quiet', '-print_format', 'json',
             '-show_streams', '-show_format', file_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **ffprobe_subprocess_kwargs(),
+        )
         if result.returncode != 0:
             return info
         data = json.loads(result.stdout)
@@ -884,6 +890,9 @@ class MainWindow(QMainWindow):
         self.act_show_missing.setShortcut(QKeySequence('Ctrl+M'))
         self.act_show_missing.toggled.connect(self._toggle_missing_from_menu)
         view_menu.addAction(self.act_show_missing)
+        act = view_menu.addAction('&Reset View')
+        act.setShortcut(QKeySequence('Ctrl+Shift+R'))
+        act.triggered.connect(self._reset_view_settings)
 
         # Actions menu
         actions_menu = mb.addMenu('&Actions')
@@ -924,6 +933,26 @@ class MainWindow(QMainWindow):
     def _toggle_missing_from_menu(self, checked: bool):
         """Sync the menu checkbox with the toolbar checkbox."""
         self.chk_show_missing.setChecked(checked)
+
+    def _reset_view_settings(self):
+        reply = QMessageBox.question(
+            self,
+            'Reset View',
+            'Reset all saved UI view settings to defaults?\n'
+            'This clears saved column widths, splitter positions, and other QSettings state.',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._settings.clear()
+        self._settings.sync()
+
+        # Re-apply in-memory defaults immediately.
+        self.chk_show_missing.setChecked(False)
+        self._apply_default_column_widths()
+        self.status_label.setText('View settings reset to defaults')
 
     def _ctx_on_selected(self, action_name: str):
         """Dispatch a context-menu action on the currently selected tree item."""
@@ -970,6 +999,7 @@ class MainWindow(QMainWindow):
             "<tr><td><code>Ctrl+W</code></td><td>Collapse seasons</td></tr>"
             "<tr><td><code>Ctrl+Shift+W</code></td><td>Collapse all</td></tr>"
             "<tr><td><code>Ctrl+M</code></td><td>Toggle show/hide missing</td></tr>"
+            "<tr><td><code>Ctrl+Shift+R</code></td><td>Reset saved view state</td></tr>"
             "<tr><td></td><td></td></tr>"
             "<tr><td><b>Actions (on selected item)</b></td><td></td></tr>"
             "<tr><td><code>M</code></td><td>Monitor</td></tr>"
@@ -1029,6 +1059,12 @@ class MainWindow(QMainWindow):
             bg = QColor(255, 200, 200)
             for cell in row:
                 cell.setBackground(bg)
+
+    def _apply_default_column_widths(self):
+        # Default layout: title column wide, data columns sized to content.
+        self.tree.setColumnWidth(0, 600)
+        for col in range(1, len(self._columns)):
+            self.tree.resizeColumnToContents(col)
 
     def _on_data_loaded(self, series_list: list):
         self.progress_bar.hide()
@@ -1182,10 +1218,7 @@ class MainWindow(QMainWindow):
             for col, w in enumerate(saved):
                 self.tree.setColumnWidth(col, int(w))
         else:
-            # sensible defaults: first column wide, rest auto-fit
-            self.tree.setColumnWidth(0, 600)
-            for col in range(1, len(self._columns)):
-                self.tree.resizeColumnToContents(col)
+            self._apply_default_column_widths()
 
         self.status_label.setText(f'{total_series} series loaded')
 
