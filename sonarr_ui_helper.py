@@ -1852,6 +1852,22 @@ def main():
         print('Sonarr is disabled in config.toml')
         sys.exit(1)
 
+    # validate required sonarr keys
+    errors = []
+    placeholders = {'your_sonarr_api_key_here', 'your-sonarr-api-key-here', ''}
+    if 'url' not in sonarr or not sonarr['url'].strip():
+        errors.append("[sonarr] 'url' is missing or empty")
+    if 'api_key' not in sonarr:
+        errors.append("[sonarr] 'api_key' is missing")
+    elif sonarr['api_key'].strip().lower() in placeholders:
+        errors.append("[sonarr] 'api_key' is still set to a placeholder value")
+    if errors:
+        print('Config validation failed:')
+        for e in errors:
+            print(f'  - {e}')
+        print(f'\nPlease edit {config_path}')
+        sys.exit(1)
+
     api = SonarrAPI(
         sonarr['url'], sonarr['api_key'],
         http_user=sonarr.get('http_basic_auth_username', ''),

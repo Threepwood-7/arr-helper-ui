@@ -134,6 +134,35 @@ english_language_codes = ["eng", "en", "english"]
         except Exception as e:
             print(f"Error creating example config: {e}")
 
+    def validate(self):
+        """Validate config and exit with friendly messages on errors."""
+        errors = []
+        placeholders = {'your_sonarr_api_key_here', 'your_radarr_api_key_here',
+                        'your-sonarr-api-key-here', 'your-radarr-api-key-here', ''}
+
+        sonarr = self.config.get('sonarr', {})
+        radarr = self.config.get('radarr', {})
+        sonarr_enabled = sonarr.get('enabled', True)
+        radarr_enabled = radarr.get('enabled', True)
+
+        for name, section, enabled in [('sonarr', sonarr, sonarr_enabled),
+                                        ('radarr', radarr, radarr_enabled)]:
+            if not enabled:
+                continue
+            if 'url' not in section or not section['url'].strip():
+                errors.append(f"[{name}] 'url' is missing or empty")
+            if 'api_key' not in section:
+                errors.append(f"[{name}] 'api_key' is missing")
+            elif section['api_key'].strip().lower() in placeholders:
+                errors.append(f"[{name}] 'api_key' is still set to a placeholder value")
+
+        if errors:
+            print("Config validation failed:")
+            for e in errors:
+                print(f"  - {e}")
+            print(f"\nPlease edit {self.config_path}")
+            sys.exit(1)
+
     def get_sonarr_config(self) -> Optional[Dict]:
         """Get Sonarr configuration"""
         sonarr = self.config.get('sonarr', {})
@@ -778,6 +807,7 @@ class MediaQualityChecker:
 def main():
     # Load configuration
     config = Config('config.toml')
+    config.validate()
 
     # Check if ffprobe is available
     ffprobe_path = find_ffprobe()

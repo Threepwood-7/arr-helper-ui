@@ -23,9 +23,9 @@ CLI script that scans all downloaded files in Sonarr and Radarr for English audi
 ## Quick Start (Windows)
 
 ```cmd
-setup.cmd          &:: Install Python dependencies
-run_ui.cmd         &:: Run the Sonarr UI helper (GUI)
-run_checker.cmd    &:: Run the media quality checker (CLI)
+wpythonpip.cmd                    &:: Install Python dependencies
+sonarr_ui_helper_launch.cmd       &:: Run the Sonarr UI helper (GUI)
+media_quality_checker_launch.cmd  &:: Run the media quality checker (CLI)
 ```
 
 ## Installation
@@ -137,9 +137,11 @@ python sonarr_ui_helper.py
 | Ctrl+W | Collapse Seasons |
 | Ctrl+Shift+W | Collapse All |
 | Ctrl+M | Toggle Missing Episodes |
+| Ctrl+Shift+R | Reset saved view state |
 | M | Monitor Selected |
 | S | Auto Search |
 | N | Manual Search |
+| Q | Change Quality Profile (series only) |
 | U | Unmonitor Selected |
 | D | Delete files from Disk (keep in Sonarr) |
 | Delete | Remove series/season from Sonarr (deletes files) |
