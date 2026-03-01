@@ -217,7 +217,6 @@ def probe_file(file_path: str) -> Dict:
         pass
 
     _probe_cache[file_path] = info
-    _save_probe_cache()
     return info
 
 
@@ -264,6 +263,8 @@ class LoadWorker(QThread):
 
         result = []
         for idx, series in enumerate(all_series):
+            if self.isInterruptionRequested():
+                return
             series_id = series['id']
             title = series.get('title', '?')
             year = series.get('year', '')
@@ -291,6 +292,8 @@ class LoadWorker(QThread):
             # group downloaded episodes by season
             seasons: Dict[int, list] = {}
             for ef in ep_files:
+                if self.isInterruptionRequested():
+                    return
                 file_path = ef.get('path', '')
                 file_id = ef.get('id')
                 eps_for_file = file_to_eps.get(file_id, [])
@@ -353,6 +356,7 @@ class LoadWorker(QThread):
             })
 
         result.sort(key=lambda s: s['title'].lower())
+        _save_probe_cache()
         self.progress.emit('Done')
         self.series_ready.emit(result)
 
@@ -1302,6 +1306,13 @@ class MainWindow(QMainWindow):
         elif action == act_unmonitor_delete:
             self._ctx_unmonitor_delete(item, node_type)
 
+    def _update_mon_column(self, item: QStandardItem, monitored: bool):
+        """Update the 'Mon' column (col 2) for the row containing item."""
+        parent = item.parent() or self.model.invisibleRootItem()
+        mon_item = parent.child(item.row(), 2)
+        if mon_item:
+            mon_item.setText('Y' if monitored else 'N')
+
     def _ctx_monitor(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
         try:
@@ -1309,6 +1320,7 @@ class MainWindow(QMainWindow):
                 series_data = self.api.get_series_by_id(series_id)
                 series_data['monitored'] = True
                 self.api.update_series(series_data)
+                self._update_mon_column(item, True)
                 self.status_label.setText(f'Monitored: {item.text()}')
             elif node_type == 'season':
                 season_num = item.data(ROLE_SEASON_NUM)
@@ -1318,12 +1330,14 @@ class MainWindow(QMainWindow):
                         s['monitored'] = True
                         break
                 self.api.update_series(series_data)
+                self._update_mon_column(item, True)
                 self.status_label.setText(f'Monitored: {item.text()}')
             elif node_type == 'episode':
                 ep_data_list = item.data(ROLE_EPISODE_DATA) or []
                 for ep in ep_data_list:
                     ep['monitored'] = True
                     self.api.update_episode(ep)
+                self._update_mon_column(item, True)
                 self.status_label.setText(f'Monitored: {item.text()}')
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to monitor:\n{e}')
@@ -1335,6 +1349,7 @@ class MainWindow(QMainWindow):
                 series_data = self.api.get_series_by_id(series_id)
                 series_data['monitored'] = False
                 self.api.update_series(series_data)
+                self._update_mon_column(item, False)
                 self.status_label.setText(f'Unmonitored: {item.text()}')
             elif node_type == 'season':
                 season_num = item.data(ROLE_SEASON_NUM)
@@ -1344,6 +1359,7 @@ class MainWindow(QMainWindow):
                         s['monitored'] = False
                         break
                 self.api.update_series(series_data)
+                self._update_mon_column(item, False)
                 # also unmonitor episodes in this season
                 self._unmonitor_season_episodes(item)
                 self.status_label.setText(f'Unmonitored: {item.text()}')
@@ -1352,6 +1368,7 @@ class MainWindow(QMainWindow):
                 for ep in ep_data_list:
                     ep['monitored'] = False
                     self.api.update_episode(ep)
+                self._update_mon_column(item, False)
                 self.status_label.setText(f'Unmonitored: {item.text()}')
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to unmonitor:\n{e}')
@@ -1367,6 +1384,7 @@ class MainWindow(QMainWindow):
                     self.api.update_episode(ep)
                 except Exception:
                     pass
+            self._update_mon_column(ep_item, False)
 
     def _ctx_auto_search(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
@@ -1414,13 +1432,16 @@ class MainWindow(QMainWindow):
 
         # search using the first episode id (Sonarr release endpoint is per-episode)
         self.status_label.setText('Searching for releases…')
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
         try:
             releases = self.api.get_release(ep_ids[0])
         except Exception as e:
+            QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, 'Error', f'Manual search failed:\n{e}')
             self.status_label.setText('Search failed')
             return
+        QApplication.restoreOverrideCursor()
 
         if not releases:
             QMessageBox.information(self, 'No Results', 'No releases found.')
@@ -1729,9 +1750,12 @@ class MainWindow(QMainWindow):
             self._refresh()
 
     def closeEvent(self, event):
-        """Save column widths before closing."""
+        """Save column widths and stop worker before closing."""
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
         self._settings.setValue('column_widths', widths)
+        if self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(5000)
         super().closeEvent(event)
 
     def _clear_cache_and_refresh(self):
@@ -1745,7 +1769,13 @@ class MainWindow(QMainWindow):
     def _refresh(self):
         """Reload all data from Sonarr."""
         if self.worker.isRunning():
-            self.worker.wait()
+            try:
+                self.worker.progress.disconnect()
+                self.worker.series_ready.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self.worker.requestInterruption()
+            self.worker.wait(5000)
         self.model.removeRows(0, self.model.rowCount())
         self.progress_bar.show()
         self.progress_bar.setRange(0, 0)
