@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import subprocess
+import tempfile
 from typing import Dict, List, Optional, Tuple
 import requests
 from pathlib import Path
@@ -20,6 +21,15 @@ from rich.panel import Panel
 from rich import box
 
 
+def _get_app_cache_dir(script_dir: str) -> str:
+    cache_dir = os.path.join(tempfile.gettempdir(), 'temp_arr_helper_ui')
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+    except OSError:
+        return script_dir
+
+
 class Config:
     """Load and manage configuration from TOML file"""
 
@@ -27,8 +37,9 @@ class Config:
         self._script_dir = os.path.dirname(os.path.abspath(__file__))
         self.config_path = os.path.join(self._script_dir, config_path) if not os.path.isabs(config_path) else config_path
         self.config = self._load_config()
-        self.user_cache_path = os.path.join(self._script_dir, 'z_user.cache')
-        self.files_cache_path = os.path.join(self._script_dir, 'z_files.cache')
+        cache_dir = _get_app_cache_dir(self._script_dir)
+        self.user_cache_path = os.path.join(cache_dir, 'z_user.cache')
+        self.files_cache_path = os.path.join(cache_dir, 'z_files.cache')
 
     def _load_config(self) -> Dict:
         """Load configuration from TOML file"""

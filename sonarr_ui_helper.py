@@ -10,6 +10,7 @@ import json
 import platform
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -116,7 +117,18 @@ class SonarrAPI:
 # ── ffprobe cache & helper ──────────────────────────────────────────
 
 _FFPROBE: str | None = None          # resolved at startup in main()
-_PROBE_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'z_fprobe.cache')
+
+
+def _get_app_cache_dir() -> str:
+    cache_dir = os.path.join(tempfile.gettempdir(), 'temp_arr_helper_ui')
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+    except OSError:
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+_PROBE_CACHE_PATH = os.path.join(_get_app_cache_dir(), 'z_fprobe.cache')
 _probe_cache: Dict = {}
 
 

@@ -112,7 +112,7 @@ python sonarr_ui_helper.py
 - Tree view of all series, seasons, and episodes
 - Monitored status column (Y/N) for series, seasons, and episodes
 - ffprobe media info columns (video codec, resolution, audio codec/channels, subtitles)
-- ffprobe results cached to `z_fprobe.cache` for fast reloads
+- ffprobe results cached to `%TEMP%\temp_arr_helper_ui\z_fprobe.cache` for fast reloads
 - Configurable highlight for episodes missing subtitle languages
 - Manual search dialog with release selection
 - Auto search (trigger Sonarr automatic search)
@@ -217,8 +217,8 @@ Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to kee
 
 ### Cache Files
 
-- `z_user.cache` - Stores skip decisions permanently. Delete entries to re-evaluate.
-- `z_files.cache` - Stores files that passed validation. Delete entries if files changed.
+- `%TEMP%\temp_arr_helper_ui\z_user.cache` - Stores skip decisions permanently. Delete entries to re-evaluate.
+- `%TEMP%\temp_arr_helper_ui\z_files.cache` - Stores files that passed validation. Delete entries if files changed.
 
 ### Automation with Cron
 
