@@ -1,8 +1,13 @@
+# Project
+qbiremo_enhanced_config.toml
+
+config.toml
+*.log
+.everything_sdk/
 *.cache
 .vs
 .claude
-
-__pycache__/
+y*.cmd
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
