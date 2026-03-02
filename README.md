@@ -1,41 +1,54 @@
 # Media Quality Checker & Sonarr UI Helper
 
-A toolkit for managing your Sonarr/Radarr media libraries: browse/manage Sonarr series with a desktop GUI, and check files for English audio/subtitles.
+A toolkit for managing Sonarr and Radarr libraries:
+- `sonarr_ui_helper.py`: desktop GUI for browsing/managing Sonarr content.
+- `media_quality_checker.py`: CLI checker for required English audio/subtitles.
 
 ## Tools Included
 
 ### 1. Sonarr UI Helper (`sonarr_ui_helper.py`)
 
-PySide6 desktop application for browsing and managing your Sonarr library. Shows series, seasons, and episodes in a treeview with ffprobe media info (codecs, resolution, audio channels, subtitles). Supports manual/auto search, monitoring, file deletion, and adding new shows.
+PySide6 desktop app for browsing and managing Sonarr series, seasons, and episodes.
+
+Key capabilities:
+- Tree view with series/season/episode hierarchy
+- Monitored status editing
+- ffprobe metadata columns (resolution, bitrates, codecs, HDR, languages)
+- Manual and auto search actions
+- File deletion workflows (delete from disk, unmonitor + delete)
+- Add new show with root folder and quality profile selection
+- Open selected path in system file explorer
 
 ![Sonarr UI Helper](sonarr_ui_helper_screenshot.jpg)
 
 ### 2. Media Quality Checker (`media_quality_checker.py`)
 
-CLI script that scans all downloaded files in Sonarr and Radarr for English audio streams and subtitles. Files missing required language tracks are deleted and re-downloaded automatically.
+CLI tool that scans downloaded files in Sonarr/Radarr for required English audio/subtitle streams.
+
+Behavior:
+- `dry_run = true`: no destructive changes; reports only
+- `dry_run = false`: files failing requirements are deleted and search commands are triggered
+- `interactive = true`: lets you view/select alternative releases or skip
 
 ## Requirements
 
-- Python 3.9+
-- ffmpeg/ffprobe installed and in PATH
-- Sonarr and/or Radarr instances with API access
+- Python 3.10+
+- ffmpeg/ffprobe installed and available in PATH
+- Sonarr and/or Radarr with API access
 
-## Quick Start (Windows)
-
-```cmd
-wpythonpip.cmd                    &:: Install Python dependencies
-sonarr_ui_helper_launch.cmd       &:: Run the Sonarr UI helper (GUI)
-media_quality_checker_launch.cmd  &:: Run the media quality checker (CLI)
-```
+Python dependencies are listed in `requirements.txt`:
+- `requests`
+- `tomli`
+- `rich`
+- `PySide6`
 
 ## Installation
 
-Install Python dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-Install ffmpeg (if not already installed):
+Install ffmpeg if needed:
 ```bash
 # Ubuntu/Debian
 sudo apt-get install ffmpeg
@@ -43,46 +56,68 @@ sudo apt-get install ffmpeg
 # macOS
 brew install ffmpeg
 
-# Windows - download from https://ffmpeg.org/download.html
+# Windows
+# download from https://ffmpeg.org/download.html
+```
+
+## Quick Start (Windows)
+
+```cmd
+python -m pip install -r requirements.txt
+sonarr_ui_helper_launch.cmd
+media_quality_checker_launch.cmd
 ```
 
 ## Configuration
 
-Both tools share a `config.toml` file. Copy `config_example.toml` to `config.toml` and edit it:
+Both tools read `config.toml` from the project directory.
+
+1. Copy `config_example.toml` to `config.toml`
+2. Fill in Sonarr/Radarr URLs and API keys
+3. Enable/disable each service with its `enabled` flag
+
+Example:
 
 ```toml
 [sonarr]
 url = "http://localhost:8989"
-api_key = "your_sonarr_api_key_here"
+api_key = "your-sonarr-api-key-here"
 enabled = true
 # http_basic_auth_username = ""
 # http_basic_auth_password = ""
 
 [radarr]
 url = "http://localhost:7878"
-api_key = "your_radarr_api_key_here"
+api_key = "your-radarr-api-key-here"
 enabled = true
 # http_basic_auth_username = ""
 # http_basic_auth_password = ""
 
 [settings]
+# safety switch for media_quality_checker.py
 dry_run = false
+
+# interactive release selection mode in media_quality_checker.py
 interactive = true
+
+# language requirements for media_quality_checker.py
 require_english_audio = true
 require_english_subs = true
 english_language_codes = ["eng", "en", "english"]
+
+# Sonarr UI Helper visual highlight label
 # highlight_missing_subs = "english"
 ```
 
-### Finding Your API Keys
+### Finding API Keys
 
-1. Open Sonarr/Radarr web interface
-2. Go to Settings -> General
-3. Under "Security" section, find "API Key"
+1. Open Sonarr/Radarr web UI
+2. Go to `Settings -> General`
+3. Find `API Key` in the Security section
 
-### HTTP Basic Auth
+### HTTP Basic Auth (Optional)
 
-If Sonarr/Radarr sit behind a reverse proxy with HTTP Basic Auth, add credentials to the relevant section:
+If your services are behind a reverse proxy with HTTP Basic Auth:
 
 ```toml
 [sonarr]
@@ -90,39 +125,28 @@ http_basic_auth_username = "myuser"
 http_basic_auth_password = "mypass"
 ```
 
-### Configuration Options
-
-- `dry_run` - Set to `true` to test without making changes
-- `require_english_audio` - Require English audio (default: true)
-- `require_english_subs` - Require English subtitles (default: true)
-- `english_language_codes` - Language codes to consider as English
-- `highlight_missing_subs` - Highlight episodes missing subtitles with a light red background in the UI. The value is a label (e.g. `"english"`) and any code from `english_language_codes` counts as a match
-- `enabled` - Enable/disable Sonarr or Radarr processing independently
-
 ## Sonarr UI Helper
 
-### Usage
+### Run
 
 ```bash
 python sonarr_ui_helper.py
 ```
 
-### Features
+### Display Columns
 
-- Tree view of all series, seasons, and episodes
-- Monitored status column (Y/N) for series, seasons, and episodes
-- ffprobe media info columns (video codec, resolution, audio codec/channels, subtitles)
-- ffprobe results cached to `%TEMP%\temp_arr_helper_ui\z_fprobe.cache` for fast reloads
-- Configurable highlight for episodes missing subtitle languages
-- Manual search dialog with release selection
-- Auto search (trigger Sonarr automatic search)
-- Add new shows with root folder and quality profile selection
-- Monitor/unmonitor episodes
-- Delete files from disk (with or without unmonitoring)
-- Open file location in Explorer
-- Show/hide missing (undownloaded) episodes
-- Expand/collapse controls for series and seasons
-- Resizable columns with remembered widths
+- Name
+- Size
+- Mon
+- Quality Profile
+- Resolution
+- V.Bitrate
+- V.Codec
+- HDR
+- A.Codec
+- A.Bitrate
+- Audio Lang
+- Sub Lang
 
 ### Keyboard Shortcuts
 
@@ -130,71 +154,52 @@ python sonarr_ui_helper.py
 |---|---|
 | Ctrl+N | Add Show |
 | F5 | Refresh |
-| Ctrl+F5 | Clear Cache & Refresh |
+| Ctrl+F5 | Clear cache and refresh |
 | Ctrl+Q | Quit |
-| Ctrl+E | Expand All |
-| Ctrl+Shift+E | Expand Series |
-| Ctrl+W | Collapse Seasons |
-| Ctrl+Shift+W | Collapse All |
-| Ctrl+M | Toggle Missing Episodes |
+| Ctrl+E | Expand all |
+| Ctrl+Shift+E | Expand series |
+| Ctrl+W | Collapse seasons |
+| Ctrl+Shift+W | Collapse all |
+| Ctrl+M | Toggle missing episodes |
 | Ctrl+Shift+R | Reset saved view state |
-| M | Monitor Selected |
-| S | Auto Search |
-| N | Manual Search |
-| Q | Change Quality Profile (series only) |
-| U | Unmonitor Selected |
-| D | Delete files from Disk (keep in Sonarr) |
+| M | Monitor selected |
+| S | Auto search |
+| N | Manual search |
+| Q | Change quality profile (series) |
+| U | Unmonitor selected |
+| D | Delete from disk (keep in Sonarr) |
 | Delete | Remove series/season from Sonarr (deletes files) |
-| Ctrl+Delete | Unmonitor & Delete |
-| O | Open in Explorer |
-| F1 | Keyboard Shortcuts Help |
-
-### Context Menu
-
-Right-click any item in the tree for quick access to all actions.
+| Ctrl+Delete | Unmonitor and delete from disk |
+| O | Open selected path |
+| F1 | Shortcut help |
 
 ## Media Quality Checker
 
-### Usage
+### Run
 
 ```bash
 python media_quality_checker.py
 ```
 
-### How It Works
+### Processing Flow
 
-1. Connects to Sonarr and Radarr via their APIs
-2. Retrieves all series/movies with downloaded files
-3. Analyzes each file using ffprobe for English audio and subtitle streams
-4. Deletes files missing required language tracks
-5. Triggers automatic search to re-download better releases
+1. Fetch series/movies from enabled services
+2. Inspect file streams via ffprobe
+3. Check against configured language requirements
+4. If failing:
+   - non-interactive: delete file + trigger search
+   - interactive: let user choose alternative, skip, or keep
+5. Cache decisions/results for future runs
 
-### Interactive Mode
+### Safety Notes
 
-Set `interactive = true` in config.toml to manually choose alternative releases:
+- Run with `dry_run = true` first.
+- In non-dry-run mode, this tool can delete files.
+- Interactive mode can permanently remember skip decisions.
 
-- Browse all available releases sorted by quality and size
-- Filter releases by search term
-- Skip and remember decisions across runs
-- Choose specific releases to download
+### Example (Interactive)
 
-### Output Examples
-
-#### File with English audio and subs:
-```
-  OK Some.Show.S01E01.1080p.BluRay.x264.mkv
-```
-
-#### File missing English content:
-```
-  X Some.Show.S01E01.1080p.BluRay.x264.mkv
-     English audio: False, English subs: True
-     Deleting file to trigger re-download...
-     Triggering search...
-```
-
-#### Interactive mode:
-```
+```text
 X Issue found: Some Show (2024)
   File: Some.Show.S01E01.1080p.BluRay.x264.mkv
   English audio: NO
@@ -202,25 +207,28 @@ X Issue found: Some Show (2024)
 
 View alternative releases? [Y/n]: y
 
-┌──────────────────────────────────────────────────────────────────────────┐
-│                Available Releases for: Some Show (2024)                 │
-├───┬──────────────────────────────────────────────────────┬─────────┬────────────┤
-│ # │ Title                                                │ Size    │ Quality    │
-├───┼──────────────────────────────────────────────────────┼─────────┼────────────┤
-│ 1 │ Some.Show.2024.2160p.UHD.BluRay.REMUX-GRP           │ 68.9 GB │ Remux-2160p│
-│ 2 │ Some.Show.2024.1080p.BluRay.REMUX-GRP               │ 25.3 GB │ Remux-1080p│
-│ 3 │ Some.Show.2024.1080p.BluRay.x264-GRP                │ 12.5 GB │ Bluray-1080│
-└───┴──────────────────────────────────────────────────────┴─────────┴────────────┘
+1) Some.Show.2024.2160p.UHD.BluRay.REMUX-GRP   68.9 GB   Remux-2160p
+2) Some.Show.2024.1080p.BluRay.REMUX-GRP       25.3 GB   Remux-1080p
+3) Some.Show.2024.1080p.BluRay.x264-GRP        12.5 GB   Bluray-1080
 
 Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to keep
 ```
 
-### Cache Files
+## Cache Files
 
-- `%TEMP%\temp_arr_helper_ui\z_user.cache` - Stores skip decisions permanently. Delete entries to re-evaluate.
-- `%TEMP%\temp_arr_helper_ui\z_files.cache` - Stores files that passed validation. Delete entries if files changed.
+Cache/state files are stored under the system temp directory in `temp_arr_helper_ui`.
+If that directory cannot be created, the scripts fall back to the project directory.
 
-### Automation with Cron
+Examples:
+- Windows: `%TEMP%\temp_arr_helper_ui\`
+- Linux/macOS: `${TMPDIR:-/tmp}/temp_arr_helper_ui/`
+
+Files:
+- `z_fprobe.cache` - ffprobe metadata cache used by `sonarr_ui_helper.py`
+- `z_user.cache` - persistent skip decisions used by `media_quality_checker.py`
+- `z_files.cache` - list of files already validated as good by `media_quality_checker.py`
+
+## Automation (cron example)
 
 ```bash
 # Run every day at 3 AM
@@ -230,27 +238,30 @@ Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to kee
 ## Troubleshooting
 
 ### ffprobe not found
-Make sure ffmpeg is installed and in your PATH:
+
+Verify ffprobe is available:
+
 ```bash
 ffprobe -version
 ```
 
 ### API connection errors
-- Verify URLs are correct (include http:// or https://)
-- Check API keys are valid
-- Ensure Sonarr/Radarr are running and accessible
 
-### Files not being detected
-- Check file paths are correct
-- Ensure the user running the script has read access to media files
-- Verify ffprobe can read the file format
+- Verify URLs include `http://` or `https://`
+- Verify API keys are valid
+- Confirm Sonarr/Radarr are reachable
+
+### Config issues
+
+- Ensure `config.toml` exists in the project directory
+- Ensure at least one of `[sonarr].enabled` or `[radarr].enabled` is `true`
 
 ## Warning
 
-The media quality checker will **delete and re-download** files. Always set `dry_run = true` in config.toml first to see what would happen!
+`media_quality_checker.py` can delete and re-download files. Validate settings with `dry_run = true` before real runs.
 
 ---
 
-### Tags
+## Legal Disclaimer
 
-sonarr, sonarr ui, sonarr gui, sonarr qt, sonarr qt ui, sonarr pyside6, sonarr desktop app, sonarr desktop client, sonarr manager, sonarr episode manager, sonarr series browser, sonarr treeview, radarr, radarr ui, media quality checker, media language checker, english audio checker, english subtitle checker, ffprobe, ffmpeg, pyside6, qt6, sonarr api, radarr api, sonarr tool, sonarr utility, sonarr helper, media library manager, tv show manager, episode browser, sonarr search, sonarr monitor, sonarr delete, sonarr file manager
+THIS SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING, WITHOUT LIMITATION, ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, OR QUIET ENJOYMENT. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE AUTHORS, CONTRIBUTORS, MAINTAINERS, DISTRIBUTORS, AND AFFILIATED PARTIES SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF DATA, PROFITS, GOODWILL, BUSINESS OPPORTUNITY, OR SERVICE INTERRUPTION, ARISING OUT OF OR RELATING TO THE USE OF, OR INABILITY TO USE, THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THIS SOFTWARE HAS BEEN DEVELOPED, IN WHOLE OR IN PART, BY "INTELLIGENT TOOLS"; ACCORDINGLY, OUTPUTS MAY CONTAIN ERRORS OR OMISSIONS, AND YOU ASSUME FULL RESPONSIBILITY FOR INDEPENDENT VALIDATION, TESTING, LEGAL COMPLIANCE, AND SAFE OPERATION PRIOR TO ANY RELIANCE OR DEPLOYMENT.
