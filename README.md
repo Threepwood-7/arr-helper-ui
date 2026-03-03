@@ -40,7 +40,7 @@ Python dependencies are listed in `requirements.txt`:
 - `requests`
 - `tomli`
 - `rich`
-- `PySide6`
+- `PySide6` (GUI only — not needed for the CLI checker)
 
 ## Installation
 
@@ -105,7 +105,8 @@ require_english_audio = true
 require_english_subs = true
 english_language_codes = ["eng", "en", "english"]
 
-# Sonarr UI Helper visual highlight label
+# Highlight episodes missing subtitles (light red background in UI).
+# The value is a label; matching is done against english_language_codes.
 # highlight_missing_subs = "english"
 ```
 
@@ -148,31 +149,54 @@ python sonarr_ui_helper.py
 - Audio Lang
 - Sub Lang
 
+### Manual Search Dialog
+
+Pressing **N** on an episode/season/series opens a Manual Search dialog that lists
+available releases from indexers. The dialog supports:
+
+- Text filter with autocomplete from previous searches
+- Quality and Indexer dropdown filters
+- Sortable columns: Title, Size (GB), Quality, Indexer, Age
+- Double-click a release row to download it
+
 ### Keyboard Shortcuts
 
 | Shortcut | Action |
 |---|---|
+| **General** | |
 | Ctrl+N | Add Show |
 | F5 | Refresh |
 | Ctrl+F5 | Clear cache and refresh |
-| Ctrl+Q | Quit |
-| Alt+X | Quit |
-| Ctrl+E | Expand all |
-| Ctrl+Shift+E | Expand series |
+| Ctrl+Q / Alt+X | Quit |
+| **Navigation** | |
+| Enter | Open file/folder in Explorer |
+| O | Open in Explorer |
+| Double-click | Open file/folder |
+| Delete | Remove series/season from Sonarr (deletes files) |
+| **View** | |
+| Ctrl+E | Expand all (except Specials) |
+| Ctrl+Shift+E | Expand series only |
 | Ctrl+W | Collapse seasons |
 | Ctrl+Shift+W | Collapse all |
 | Ctrl+M | Toggle missing episodes |
 | Ctrl+Shift+R | Reset saved view state |
+| **Actions** | |
 | M | Monitor selected |
 | S | Auto search |
 | N | Manual search |
 | Q | Change quality profile (series) |
 | U | Unmonitor selected |
 | D | Delete from disk (keep in Sonarr) |
-| Delete | Remove series/season from Sonarr (deletes files) |
 | Ctrl+Delete | Unmonitor and delete from disk |
-| O | Open selected path |
 | F1 | Shortcut help |
+
+### Menus
+
+- **File** — Add Show, Refresh, Clear Cache & Refresh, Quit
+- **View** — Show Missing, Fit Columns, Reset View
+- **Actions** — Monitor, Auto Search, Manual Search, Change Quality Profile, Unmonitor, Delete from Disk, Unmonitor & Delete, Open in Explorer
+- **Tools** — Edit .ini file (opens the QSettings INI in your default editor)
+- **Help** — Keyboard Shortcuts
 
 ## Media Quality Checker
 
@@ -215,6 +239,37 @@ View alternative releases? [Y/n]: y
 Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to keep
 ```
 
+## Project Structure
+
+```
+arr-helper-ui/
+├── sonarr_ui_helper.py          # Desktop GUI (PySide6)
+├── media_quality_checker.py     # CLI quality checker
+├── ffprobe_utils.py             # Cross-platform ffprobe detection
+├── config.toml                  # Your configuration (not in repo)
+├── config_example.toml          # Configuration template
+├── requirements.txt             # Production dependencies
+├── requirements-dev.txt         # Test dependencies (pytest, pytest-qt)
+├── tests/
+│   ├── conftest.py              # Pytest fixtures (headless Qt setup)
+│   ├── test_sonarr_ui_helper_unit.py
+│   ├── test_sonarr_ui_helper_qt.py
+│   └── test_media_quality_checker_unit.py
+├── sonarr_ui_helper_launch.cmd  # Windows GUI launcher
+├── media_quality_checker_launch.cmd
+└── sonarr_ui_helper_screenshot.jpg
+```
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+Tests run headless (`QT_QPA_PLATFORM=offscreen`) and cover API interaction,
+cache logic, Qt window lifecycle, and the quality checker's decision logic.
+
 ## Cache Files
 
 Cache/state files are stored under the system temp directory in `temp_arr_helper_ui`.
@@ -239,6 +294,9 @@ Files:
 ## Troubleshooting
 
 ### ffprobe not found
+
+On Windows the tools automatically search common install locations
+(Chocolatey, Scoop, WinGet, `C:\ffmpeg`, etc.) even if ffprobe is not in PATH.
 
 Verify ffprobe is available:
 
