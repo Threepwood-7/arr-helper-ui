@@ -9,6 +9,8 @@ import sys
 import json
 import subprocess
 import tempfile
+import threading
+import time
 from typing import Dict, List, Optional, Tuple
 import requests
 from pathlib import Path
@@ -28,6 +30,95 @@ def _get_app_cache_dir(script_dir: str) -> str:
         return cache_dir
     except OSError:
         return script_dir
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _acquire_lock_file(lock_path: str, timeout_s: float = 10.0) -> tuple[int, str]:
+    token = f'{os.getpid()}:{threading.get_ident()}:{time.time_ns()}'
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, token.encode('ascii', errors='ignore'))
+            return fd, token
+        except FileExistsError:
+            stale = False
+            try:
+                age = time.time() - os.path.getmtime(lock_path)
+                if age > 5:
+                    owner = ''
+                    try:
+                        with open(lock_path, 'r') as f:
+                            owner = f.read().strip()
+                    except OSError:
+                        owner = ''
+                    try:
+                        owner_pid = int(owner.split(':', 1)[0]) if owner else 0
+                    except (TypeError, ValueError):
+                        owner_pid = 0
+                    if owner_pid and not _pid_is_running(owner_pid):
+                        stale = True
+                    elif age > 3600:
+                        stale = True
+            except OSError:
+                pass
+            if stale:
+                try:
+                    os.remove(lock_path)
+                    continue
+                except OSError:
+                    pass
+            if time.time() >= deadline:
+                raise TimeoutError(f"Timeout acquiring lock: {lock_path}")
+            time.sleep(0.05)
+
+
+def _release_lock_file(lock_path: str, lock_fd: int, token: str):
+    try:
+        os.close(lock_fd)
+    finally:
+        try:
+            owner = ''
+            with open(lock_path, 'r') as f:
+                owner = f.read().strip()
+            if owner == token:
+                os.remove(lock_path)
+        except OSError:
+            pass
+
+
+def _write_json_atomic_locked(path: str, payload: Dict, indent: int = 2):
+    lock_path = f'{path}.lock'
+    lock_fd, lock_token = _acquire_lock_file(lock_path)
+    tmp_path = f'{path}.tmp.{os.getpid()}.{threading.get_ident()}'
+    try:
+        with open(tmp_path, 'w') as f:
+            json.dump(payload, f, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    finally:
+        _release_lock_file(lock_path, lock_fd, lock_token)
 
 
 class Config:
@@ -70,8 +161,7 @@ class Config:
     def save_user_cache(self, cache: Dict):
         """Save user decisions cache"""
         try:
-            with open(self.user_cache_path, 'w') as f:
-                json.dump(cache, f, indent=2)
+            _write_json_atomic_locked(self.user_cache_path, cache, indent=2)
         except Exception as e:
             print(f"Warning: Could not save user cache: {e}")
 
@@ -89,8 +179,7 @@ class Config:
     def save_files_cache(self, cache: Dict):
         """Save good files cache"""
         try:
-            with open(self.files_cache_path, 'w') as f:
-                json.dump(cache, f, indent=2)
+            _write_json_atomic_locked(self.files_cache_path, cache, indent=2)
         except Exception as e:
             print(f"Warning: Could not save files cache: {e}")
 
@@ -218,21 +307,58 @@ class MediaQualityChecker:
         self.user_cache = config.load_user_cache() if config else {}
         self.files_cache = config.load_files_cache() if config else {}
 
-        # Build sets for O(1) lookups (JSON stores lists, we use sets in memory)
-        self._good_files_set = set(self.files_cache.get('good_files', []))
-        self._skipped_files_set = set(self.user_cache.get('skipped_files', []))
+        # Keep cache entries keyed by file path, validated by a file signature
+        # (size + mtime) to avoid stale "good/skipped" decisions.
+        self._good_files_map = self._normalize_cache_map(self.files_cache.get('good_files', {}))
+        self._skipped_files_map = self._normalize_cache_map(self.user_cache.get('skipped_files', {}))
+        self.files_cache['good_files'] = self._good_files_map
+        self.user_cache['skipped_files'] = self._skipped_files_map
+
+    @staticmethod
+    def _file_signature(file_path: str) -> str:
+        try:
+            stat = os.stat(file_path)
+            return f'{stat.st_size}:{stat.st_mtime_ns}'
+        except OSError:
+            return ''
+
+    def _normalize_cache_map(self, raw_value) -> Dict[str, str]:
+        normalized: Dict[str, str] = {}
+        if isinstance(raw_value, dict):
+            for path, signature in raw_value.items():
+                if isinstance(path, str) and isinstance(signature, str) and signature:
+                    normalized[path] = signature
+        elif isinstance(raw_value, list):
+            # Backward compatibility with old list[str] format.
+            for path in raw_value:
+                if isinstance(path, str):
+                    signature = self._file_signature(path)
+                    if signature:
+                        normalized[path] = signature
+        return normalized
+
+    def _is_cached_match(self, cache_map: Dict[str, str], file_path: str) -> bool:
+        cached_signature = cache_map.get(file_path)
+        if not cached_signature:
+            return False
+        current_signature = self._file_signature(file_path)
+        if current_signature and current_signature == cached_signature:
+            return True
+        # Drop stale cache entry when file contents changed or disappeared.
+        cache_map.pop(file_path, None)
+        return False
 
     def _add_good_file(self, file_path: str):
         """Add a file to the good files cache."""
-        if file_path not in self._good_files_set:
-            self._good_files_set.add(file_path)
-            self.files_cache.setdefault('good_files', []).append(file_path)
+        signature = self._file_signature(file_path)
+        if signature:
+            self._good_files_map[file_path] = signature
 
     def _add_skipped_file(self, file_path: str):
         """Add a file to the skipped files cache."""
-        if file_path not in self._skipped_files_set:
-            self._skipped_files_set.add(file_path)
-            self.user_cache.setdefault('skipped_files', []).append(file_path)
+        signature = self._file_signature(file_path)
+        if signature:
+            self._skipped_files_map[file_path] = signature
 
     def save_caches(self):
         """Save user cache and files cache to disk"""
@@ -240,11 +366,23 @@ class MediaQualityChecker:
             self.config.save_user_cache(self.user_cache)
             self.config.save_files_cache(self.files_cache)
 
-    def _make_request(self, url: str, api_key: str, endpoint: str, method: str = 'GET', data: Dict = None) -> Optional[Dict]:
+    def _make_request(
+        self,
+        url: str,
+        api_key: str,
+        endpoint: str,
+        method: str = 'GET',
+        data: Dict = None,
+        auth: tuple = None,
+    ) -> Optional[Dict]:
         """Make API request to Sonarr/Radarr"""
         headers = {'X-Api-Key': api_key}
         full_url = f"{url}/api/v3/{endpoint}"
-        auth = self.sonarr_http_auth if url == self.sonarr_url else self.radarr_http_auth
+        if auth is None:
+            if url == self.sonarr_url:
+                auth = self.sonarr_http_auth
+            elif url == self.radarr_url:
+                auth = self.radarr_http_auth
 
         try:
             if method == 'GET':
@@ -257,7 +395,13 @@ class MediaQualityChecker:
                 response = requests.post(full_url, headers=headers, auth=auth, json=data, timeout=300)
 
             response.raise_for_status()
-            return response.json() if response.text else {}
+            if not response.text:
+                return {}
+            try:
+                return response.json()
+            except ValueError as e:
+                print(f"Error parsing JSON from {full_url}: {e}")
+                return None
         except requests.exceptions.RequestException as e:
             print(f"Error making request to {full_url}: {e}")
             return None
@@ -343,7 +487,8 @@ class MediaQualityChecker:
         releases = self._make_request(
             self.sonarr_url,
             self.sonarr_api,
-            endpoint
+            endpoint,
+            auth=self.sonarr_http_auth,
         )
         return releases or []
 
@@ -352,7 +497,8 @@ class MediaQualityChecker:
         episodes = self._make_request(
             self.sonarr_url,
             self.sonarr_api,
-            f'episode?seriesId={series_id}'
+            f'episode?seriesId={series_id}',
+            auth=self.sonarr_http_auth,
         )
 
         if not episodes:
@@ -375,7 +521,8 @@ class MediaQualityChecker:
         releases = self._make_request(
             self.radarr_url,
             self.radarr_api,
-            endpoint
+            endpoint,
+            auth=self.radarr_http_auth,
         )
         return releases or []
 
@@ -521,10 +668,11 @@ class MediaQualityChecker:
                 api_key,
                 'release',
                 method='POST',
-                data=data
+                data=data,
+                auth=self.sonarr_http_auth if is_sonarr else self.radarr_http_auth,
             )
 
-            if result:
+            if result is not None:
                 self.console.print("[green]+ Download queued successfully[/green]")
                 return True
             else:
@@ -543,7 +691,12 @@ class MediaQualityChecker:
             print("\n=== Processing Sonarr ===")
 
         # Get all series
-        series_list = self._make_request(self.sonarr_url, self.sonarr_api, 'series')
+        series_list = self._make_request(
+            self.sonarr_url,
+            self.sonarr_api,
+            'series',
+            auth=self.sonarr_http_auth,
+        )
         if not series_list:
             msg = "Failed to fetch series from Sonarr"
             if self.interactive:
@@ -566,7 +719,8 @@ class MediaQualityChecker:
             episode_files = self._make_request(
                 self.sonarr_url,
                 self.sonarr_api,
-                f'episodefile?seriesId={series_id}'
+                f'episodefile?seriesId={series_id}',
+                auth=self.sonarr_http_auth,
             )
 
             if not episode_files:
@@ -585,7 +739,7 @@ class MediaQualityChecker:
                     continue
 
                 # Check if file is already in good files cache
-                if file_path in self._good_files_set:
+                if self._is_cached_match(self._good_files_map, file_path):
                     if self.interactive:
                         self.console.print(f"[dim]Skipping (already verified as OK): {Path(file_path).name}[/dim]")
                     continue
@@ -597,7 +751,7 @@ class MediaQualityChecker:
                     filename = Path(file_path).name
 
                     # Check if this file was previously skipped BEFORE showing anything
-                    if file_path in self._skipped_files_set:
+                    if self._is_cached_match(self._skipped_files_map, file_path):
                         if self.interactive:
                             self.console.print(f"[dim]Skipping (previously marked to skip): {filename}[/dim]")
                         continue
@@ -627,7 +781,8 @@ class MediaQualityChecker:
                                         self.sonarr_url,
                                         self.sonarr_api,
                                         f'episodefile/{file_id}',
-                                        method='DELETE'
+                                        method='DELETE',
+                                        auth=self.sonarr_http_auth,
                                     )
 
                                     # Download selected release
@@ -652,17 +807,19 @@ class MediaQualityChecker:
                         print(f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}")
 
                         if not dry_run:
+                            # Capture episode ids before deleting the file mapping.
+                            episode_ids = self.get_episodes_for_file(series_id, file_id)
                             # Delete the episode file to trigger re-download
                             print(f"     Deleting file to trigger re-download...")
                             self._make_request(
                                 self.sonarr_url,
                                 self.sonarr_api,
                                 f'episodefile/{file_id}',
-                                method='DELETE'
+                                method='DELETE',
+                                auth=self.sonarr_http_auth,
                             )
 
                             # Trigger search for the episodes
-                            episode_ids = self.get_episodes_for_file(series_id, file_id)
                             if episode_ids:
                                 print(f"     Triggering episode search...")
                                 self._make_request(
@@ -670,8 +827,11 @@ class MediaQualityChecker:
                                     self.sonarr_api,
                                     'command',
                                     method='POST',
-                                    data={'name': 'EpisodeSearch', 'episodeIds': episode_ids}
+                                    data={'name': 'EpisodeSearch', 'episodeIds': episode_ids},
+                                    auth=self.sonarr_http_auth,
                                 )
+                            else:
+                                print("     Could not resolve episode IDs before delete; search not triggered")
                         else:
                             print(f"     [DRY RUN] Would delete and re-download")
                 else:
@@ -692,7 +852,12 @@ class MediaQualityChecker:
             print("\n=== Processing Radarr ===")
 
         # Get all movies
-        movies = self._make_request(self.radarr_url, self.radarr_api, 'movie')
+        movies = self._make_request(
+            self.radarr_url,
+            self.radarr_api,
+            'movie',
+            auth=self.radarr_http_auth,
+        )
         if not movies:
             msg = "Failed to fetch movies from Radarr"
             if self.interactive:
@@ -721,7 +886,7 @@ class MediaQualityChecker:
                 continue
 
             # Check if file is already in good files cache
-            if file_path in self._good_files_set:
+            if self._is_cached_match(self._good_files_map, file_path):
                 if self.interactive:
                     self.console.print(f"[dim]Skipping (already verified as OK): {movie_title}[/dim]")
                 continue
@@ -733,7 +898,7 @@ class MediaQualityChecker:
                 filename = Path(file_path).name
 
                 # Check if this file was previously skipped BEFORE showing anything
-                if file_path in self._skipped_files_set:
+                if self._is_cached_match(self._skipped_files_map, file_path):
                     if self.interactive:
                         self.console.print(f"[dim]Skipping (previously marked to skip): {movie_title}[/dim]")
                     continue
@@ -760,7 +925,8 @@ class MediaQualityChecker:
                                 self.radarr_url,
                                 self.radarr_api,
                                 f'moviefile/{file_id}',
-                                method='DELETE'
+                                method='DELETE',
+                                auth=self.radarr_http_auth,
                             )
 
                             # Download selected release
@@ -790,7 +956,8 @@ class MediaQualityChecker:
                             self.radarr_url,
                             self.radarr_api,
                             f'moviefile/{file_id}',
-                            method='DELETE'
+                            method='DELETE',
+                            auth=self.radarr_http_auth,
                         )
 
                         # Trigger movie search
@@ -800,7 +967,8 @@ class MediaQualityChecker:
                             self.radarr_api,
                             'command',
                             method='POST',
-                            data={'name': 'MoviesSearch', 'movieIds': [movie_id]}
+                            data={'name': 'MoviesSearch', 'movieIds': [movie_id]},
+                            auth=self.radarr_http_auth,
                         )
                     else:
                         print(f"     [DRY RUN] Would delete and re-download")

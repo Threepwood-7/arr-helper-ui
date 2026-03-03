@@ -156,6 +156,7 @@ python sonarr_ui_helper.py
 | F5 | Refresh |
 | Ctrl+F5 | Clear cache and refresh |
 | Ctrl+Q | Quit |
+| Alt+X | Quit |
 | Ctrl+E | Expand all |
 | Ctrl+Shift+E | Expand series |
 | Ctrl+W | Collapse seasons |

@@ -11,6 +11,8 @@ import platform
 import subprocess
 import shutil
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -31,29 +33,37 @@ from PySide6.QtWidgets import (
 # ── Sonarr API helpers ──────────────────────────────────────────────
 
 class SonarrAPI:
-    def __init__(self, url: str, api_key: str, http_user: str = '', http_pass: str = ''):
+    def __init__(
+        self,
+        url: str,
+        api_key: str,
+        http_user: str = '',
+        http_pass: str = '',
+        request_timeout: int | tuple = (5, 30),
+    ):
         self.url = url.rstrip('/')
         self.api_key = api_key
         self.headers = {'X-Api-Key': api_key}
         self.auth = (http_user, http_pass) if http_user else None
+        self.timeout = request_timeout
 
     def _get(self, endpoint: str):
-        r = requests.get(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, timeout=300)
+        r = requests.get(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, timeout=self.timeout)
         r.raise_for_status()
         return r.json()
 
     def _post(self, endpoint: str, data: dict):
-        r = requests.post(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, json=data, timeout=300)
+        r = requests.post(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, json=data, timeout=self.timeout)
         r.raise_for_status()
         return r.json() if r.text else {}
 
     def _delete(self, endpoint: str, params: dict = None):
-        r = requests.delete(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, params=params or {}, timeout=300)
+        r = requests.delete(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, params=params or {}, timeout=self.timeout)
         r.raise_for_status()
         return r
 
     def _put(self, endpoint: str, data: dict):
-        r = requests.put(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, json=data, timeout=300)
+        r = requests.put(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, json=data, timeout=self.timeout)
         r.raise_for_status()
         return r.json()
 
@@ -129,7 +139,77 @@ def _get_app_cache_dir() -> str:
 
 
 _PROBE_CACHE_PATH = os.path.join(_get_app_cache_dir(), 'z_fprobe.cache')
+_PROBE_CACHE_LOCK_PATH = f'{_PROBE_CACHE_PATH}.lock'
 _probe_cache: Dict = {}
+_probe_cache_lock = threading.RLock()
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _acquire_probe_lock(timeout_s: float = 10.0) -> tuple[int, str]:
+    token = f'{os.getpid()}:{threading.get_ident()}:{time.time_ns()}'
+    deadline = time.time() + timeout_s
+    while True:
+        try:
+            fd = os.open(_PROBE_CACHE_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, token.encode('ascii', errors='ignore'))
+            return fd, token
+        except FileExistsError:
+            stale = False
+            try:
+                age = time.time() - os.path.getmtime(_PROBE_CACHE_LOCK_PATH)
+                if age > 5:
+                    owner = ''
+                    try:
+                        with open(_PROBE_CACHE_LOCK_PATH, 'r') as f:
+                            owner = f.read().strip()
+                    except OSError:
+                        owner = ''
+                    try:
+                        owner_pid = int(owner.split(':', 1)[0]) if owner else 0
+                    except (TypeError, ValueError):
+                        owner_pid = 0
+                    if owner_pid and not _pid_is_running(owner_pid):
+                        stale = True
+                    elif age > 3600:
+                        stale = True
+            except OSError:
+                pass
+            if stale:
+                try:
+                    os.remove(_PROBE_CACHE_LOCK_PATH)
+                    continue
+                except OSError:
+                    pass
+            if time.time() >= deadline:
+                raise TimeoutError(f'Timeout acquiring cache lock: {_PROBE_CACHE_LOCK_PATH}')
+            time.sleep(0.05)
+
+
+def _release_probe_lock(lock_fd: int, token: str):
+    try:
+        os.close(lock_fd)
+    finally:
+        try:
+            owner = ''
+            with open(_PROBE_CACHE_LOCK_PATH, 'r') as f:
+                owner = f.read().strip()
+            if owner == token:
+                os.remove(_PROBE_CACHE_LOCK_PATH)
+        except OSError:
+            pass
 
 
 def _load_probe_cache():
@@ -137,17 +217,45 @@ def _load_probe_cache():
     if os.path.exists(_PROBE_CACHE_PATH):
         try:
             with open(_PROBE_CACHE_PATH, 'r') as f:
-                _probe_cache = json.load(f)
+                loaded = json.load(f)
+            with _probe_cache_lock:
+                _probe_cache = loaded if isinstance(loaded, dict) else {}
         except Exception:
-            _probe_cache = {}
+            with _probe_cache_lock:
+                _probe_cache = {}
 
 
-def _save_probe_cache():
+def _save_probe_cache(replace: bool = False):
+    with _probe_cache_lock:
+        snapshot = dict(_probe_cache)
+    lock_fd = None
+    lock_token = ''
+    tmp_path = f'{_PROBE_CACHE_PATH}.tmp.{os.getpid()}.{threading.get_ident()}'
     try:
-        with open(_PROBE_CACHE_PATH, 'w') as f:
-            json.dump(_probe_cache, f, indent=1)
+        lock_fd, lock_token = _acquire_probe_lock()
+        if not replace and os.path.exists(_PROBE_CACHE_PATH):
+            try:
+                with open(_PROBE_CACHE_PATH, 'r') as f:
+                    existing = json.load(f)
+                if isinstance(existing, dict):
+                    existing.update(snapshot)
+                    snapshot = existing
+            except Exception:
+                pass
+        with open(tmp_path, 'w') as f:
+            json.dump(snapshot, f, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, _PROBE_CACHE_PATH)
     except Exception:
-        pass
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+    finally:
+        if lock_fd is not None:
+            _release_probe_lock(lock_fd, lock_token)
 
 
 def probe_file(file_path: str) -> Dict:
@@ -169,7 +277,8 @@ def probe_file(file_path: str) -> Dict:
         pass
 
     # check cache — keyed by path, invalidated if size changed or fields missing
-    cached = _probe_cache.get(file_path)
+    with _probe_cache_lock:
+        cached = _probe_cache.get(file_path)
     if cached and cached.get('size_bytes') == info['size_bytes'] and 'video_resolution' in cached:
         return cached
 
@@ -234,7 +343,8 @@ def probe_file(file_path: str) -> Dict:
     except Exception:
         pass
 
-    _probe_cache[file_path] = info
+    with _probe_cache_lock:
+        _probe_cache[file_path] = info
     return info
 
 
@@ -271,112 +381,135 @@ class LoadWorker(QThread):
         self.api = api
 
     def run(self):
-        self.progress.emit('Fetching series list…')
         try:
-            all_series = self.api.get_series()
-        except Exception as e:
-            self.progress.emit(f'Error: {e}')
-            self.series_ready.emit([])
-            return
-
-        result = []
-        for idx, series in enumerate(all_series):
-            if self.isInterruptionRequested():
+            self.progress.emit('Fetching series list…')
+            try:
+                all_series = self.api.get_series()
+            except Exception as e:
+                self.progress.emit(f'Error: {e}')
+                self.series_ready.emit([])
                 return
-            series_id = series['id']
-            title = series.get('title', '?')
-            year = series.get('year', '')
-            series_path = series.get('path', '')
 
-            self.progress.emit(f'Loading {idx + 1}/{len(all_series)}: {title}')
-
-            try:
-                ep_files = self.api.get_episode_files(series_id)
-            except Exception:
-                ep_files = []
-
-            try:
-                episodes = self.api.get_episodes(series_id)
-            except Exception:
-                episodes = []
-
-            # map episode_file_id -> episode metadata
-            file_to_eps: Dict[int, list] = {}
-            for ep in episodes:
-                fid = ep.get('episodeFileId', 0)
-                if fid:
-                    file_to_eps.setdefault(fid, []).append(ep)
-
-            # group downloaded episodes by season
-            seasons: Dict[int, list] = {}
-            for ef in ep_files:
+            result = []
+            series_error_count = 0
+            for idx, series in enumerate(all_series):
                 if self.isInterruptionRequested():
                     return
-                file_path = ef.get('path', '')
-                file_id = ef.get('id')
-                eps_for_file = file_to_eps.get(file_id, [])
-                season_num = eps_for_file[0].get('seasonNumber', 0) if eps_for_file else 0
-                ep_num = eps_for_file[0].get('episodeNumber', 0) if eps_for_file else 0
+                series_id = series.get('id')
+                if series_id is None:
+                    series_error_count += 1
+                    self.progress.emit('Warning: skipped a series with missing id')
+                    continue
+                title = series.get('title', '?')
+                year = series.get('year', '')
+                series_path = series.get('path', '')
 
-                probe = probe_file(file_path)
+                self.progress.emit(f'Loading {idx + 1}/{len(all_series)}: {title}')
 
-                ep_entry = {
-                    'episode_number': ep_num,
-                    'file_name': Path(file_path).name if file_path else '',
-                    'file_path': file_path,
-                    'file_id': file_id,
-                    'size_bytes': probe['size_bytes'],
-                    'video_resolution': probe['video_resolution'],
-                    'video_bitrate': probe['video_bitrate'],
-                    'video_codec': probe['video_codec'],
-                    'hdr': probe['hdr'],
-                    'audio_codec': probe['audio_codec'],
-                    'audio_bitrate': probe['audio_bitrate'],
-                    'audio_langs': ', '.join(dict.fromkeys(probe['audio_langs'])),
-                    'sub_langs': ', '.join(dict.fromkeys(probe['sub_langs'])),
-                    'episode_data': eps_for_file,
-                }
-                seasons.setdefault(season_num, []).append(ep_entry)
+                series_failed = False
+                try:
+                    ep_files = self.api.get_episode_files(series_id)
+                except Exception as e:
+                    self.progress.emit(f'Warning: failed episode files for "{title}": {e}')
+                    series_failed = True
+                    ep_files = []
 
-            # sort episodes inside each season
-            for sn in seasons:
-                seasons[sn].sort(key=lambda e: e['episode_number'])
+                try:
+                    episodes = self.api.get_episodes(series_id)
+                except Exception as e:
+                    self.progress.emit(f'Warning: failed episodes for "{title}": {e}')
+                    series_failed = True
+                    episodes = []
 
-            # collect missing episodes per season (no file)
-            missing_seasons: Dict[int, list] = {}
-            for ep in episodes:
-                if ep.get('episodeFileId', 0) == 0:
-                    sn = ep.get('seasonNumber', 0)
-                    missing_seasons.setdefault(sn, []).append(ep)
-            for sn in missing_seasons:
-                missing_seasons[sn].sort(key=lambda e: e.get('episodeNumber', 0))
+                if series_failed:
+                    series_error_count += 1
+                    continue
 
-            # collect all season numbers from the series metadata
-            all_season_nums = set()
-            for s_info in series.get('seasons', []):
-                all_season_nums.add(s_info.get('seasonNumber', 0))
-            # also include seasons from episodes
-            for ep in episodes:
-                all_season_nums.add(ep.get('seasonNumber', 0))
+                # map episode_file_id -> episode metadata
+                file_to_eps: Dict[int, list] = {}
+                for ep in episodes:
+                    fid = ep.get('episodeFileId', 0)
+                    if fid:
+                        file_to_eps.setdefault(fid, []).append(ep)
 
-            total_size = sum(e['size_bytes'] for s in seasons.values() for e in s)
+                # group downloaded episodes by season
+                seasons: Dict[int, list] = {}
+                for ef in ep_files:
+                    if self.isInterruptionRequested():
+                        return
+                    file_path = ef.get('path', '')
+                    file_id = ef.get('id')
+                    eps_for_file = file_to_eps.get(file_id, [])
+                    season_num = eps_for_file[0].get('seasonNumber', 0) if eps_for_file else 0
+                    ep_num = eps_for_file[0].get('episodeNumber', 0) if eps_for_file else 0
 
-            result.append({
-                'series_id': series_id,
-                'title': title,
-                'year': year,
-                'path': series_path,
-                'total_size': total_size,
-                'seasons': seasons,
-                'missing_seasons': missing_seasons,
-                'all_season_nums': sorted(all_season_nums),
-                'series_data': series,
-            })
+                    probe = probe_file(file_path)
 
-        result.sort(key=lambda s: s['title'].lower())
-        _save_probe_cache()
-        self.progress.emit('Done')
-        self.series_ready.emit(result)
+                    ep_entry = {
+                        'episode_number': ep_num,
+                        'file_name': Path(file_path).name if file_path else '',
+                        'file_path': file_path,
+                        'file_id': file_id,
+                        'size_bytes': probe['size_bytes'],
+                        'video_resolution': probe['video_resolution'],
+                        'video_bitrate': probe['video_bitrate'],
+                        'video_codec': probe['video_codec'],
+                        'hdr': probe['hdr'],
+                        'audio_codec': probe['audio_codec'],
+                        'audio_bitrate': probe['audio_bitrate'],
+                        'audio_langs': ', '.join(dict.fromkeys(probe['audio_langs'])),
+                        'sub_langs': ', '.join(dict.fromkeys(probe['sub_langs'])),
+                        'episode_data': eps_for_file,
+                    }
+                    seasons.setdefault(season_num, []).append(ep_entry)
+
+                # sort episodes inside each season
+                for sn in seasons:
+                    seasons[sn].sort(key=lambda e: e['episode_number'])
+
+                # collect missing episodes per season (no file)
+                missing_seasons: Dict[int, list] = {}
+                for ep in episodes:
+                    if ep.get('episodeFileId', 0) == 0:
+                        sn = ep.get('seasonNumber', 0)
+                        missing_seasons.setdefault(sn, []).append(ep)
+                for sn in missing_seasons:
+                    missing_seasons[sn].sort(key=lambda e: e.get('episodeNumber', 0))
+
+                # collect all season numbers from the series metadata
+                all_season_nums = set()
+                for s_info in series.get('seasons', []):
+                    all_season_nums.add(s_info.get('seasonNumber', 0))
+                # also include seasons from episodes
+                for ep in episodes:
+                    all_season_nums.add(ep.get('seasonNumber', 0))
+
+                total_size = sum(e['size_bytes'] for s in seasons.values() for e in s)
+
+                result.append({
+                    'series_id': series_id,
+                    'title': title,
+                    'year': year,
+                    'path': series_path,
+                    'total_size': total_size,
+                    'seasons': seasons,
+                    'missing_seasons': missing_seasons,
+                    'all_season_nums': sorted(all_season_nums),
+                    'series_data': series,
+                })
+
+            result.sort(key=lambda s: str(s.get('title', '')).lower())
+            _save_probe_cache()
+            if series_error_count:
+                self.progress.emit(f'Done with warnings: loaded {len(result)} series, skipped {series_error_count}')
+            else:
+                self.progress.emit('Done')
+            self.series_ready.emit(result)
+        except Exception as e:
+            if self.isInterruptionRequested():
+                return
+            self.progress.emit(f'Error: unexpected loader failure: {e}')
+            self.series_ready.emit([])
 
 
 # ── Custom data roles ──────────────────────────────────────────────
@@ -767,13 +900,16 @@ class AddShowDialog(QDialog):
 # ── Main window ────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
-    def __init__(self, api: SonarrAPI, settings: dict = None):
+    def __init__(self, api: SonarrAPI, loader_api: Optional[SonarrAPI] = None, settings: dict = None):
         super().__init__()
         self.api = api
+        self.loader_api = loader_api or api
         self.cfg = settings or {}
         self._settings = QSettings('SonarrUIHelper', 'SonarrUIHelper')
         self.setWindowTitle('Sonarr UI Helper')
         self.resize(1600, 800)
+        self._last_worker_error = ''
+        self._worker_warning_count = 0
 
         # ── Menu bar ──────────────────────────────────────────
         self._build_menu_bar()
@@ -785,7 +921,7 @@ class MainWindow(QMainWindow):
 
         # toolbar (with mnemonics via &)
         toolbar = QHBoxLayout()
-        btn_expand_all = QPushButton('E&xpand All')
+        btn_expand_all = QPushButton('Expand &All')
         btn_expand_all.clicked.connect(self._expand_all)
         btn_expand_series = QPushButton('Expand &Series')
         btn_expand_series.clicked.connect(self._expand_series)
@@ -855,10 +991,8 @@ class MainWindow(QMainWindow):
             pass
 
         # start loading
-        self.worker = LoadWorker(api)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.series_ready.connect(self._on_data_loaded)
-        self.worker.start()
+        self.worker: Optional[LoadWorker] = None
+        self._start_worker()
 
     # ── menu bar ───────────────────────────────────────────────
 
@@ -878,7 +1012,7 @@ class MainWindow(QMainWindow):
         act.triggered.connect(self._clear_cache_and_refresh)
         file_menu.addSeparator()
         act = file_menu.addAction('E&xit')
-        act.setShortcut(QKeySequence('Ctrl+Q'))
+        act.setShortcuts([QKeySequence('Ctrl+Q'), QKeySequence('Alt+X')])
         act.triggered.connect(self.close)
 
         # View menu
@@ -998,6 +1132,7 @@ class MainWindow(QMainWindow):
             "<tr><td><code>Ctrl+F5</code></td><td>Clear cache &amp; refresh</td></tr>"
             "<tr><td><code>Ctrl+N</code></td><td>Add a new show</td></tr>"
             "<tr><td><code>Ctrl+Q</code></td><td>Quit</td></tr>"
+            "<tr><td><code>Alt+X</code></td><td>Quit</td></tr>"
             "<tr><td></td><td></td></tr>"
             "<tr><td><b>Navigation</b></td><td></td></tr>"
             "<tr><td><code>Enter</code></td><td>Open file/folder in Explorer</td></tr>"
@@ -1023,7 +1158,7 @@ class MainWindow(QMainWindow):
             "<tr><td><code>Ctrl+Delete</code></td><td>Unmonitor &amp; Delete from disk</td></tr>"
             "<tr><td></td><td></td></tr>"
             "<tr><td><b>Toolbar Mnemonics (Alt+key)</b></td><td></td></tr>"
-            "<tr><td><code>Alt+X</code></td><td>Expand All</td></tr>"
+            "<tr><td><code>Alt+A</code></td><td>Expand All</td></tr>"
             "<tr><td><code>Alt+S</code></td><td>Expand Series</td></tr>"
             "<tr><td><code>Alt+E</code></td><td>Collapse Seasons</td></tr>"
             "<tr><td><code>Alt+C</code></td><td>Collapse Series</td></tr>"
@@ -1040,6 +1175,36 @@ class MainWindow(QMainWindow):
 
     def _on_progress(self, text: str):
         self.status_label.setText(text)
+
+    def _on_worker_progress(self, worker: LoadWorker, text: str):
+        if worker is not self.worker:
+            return
+        if text.startswith('Error:'):
+            self._last_worker_error = text
+        elif text.startswith('Warning:'):
+            self._worker_warning_count += 1
+        self._on_progress(text)
+
+    def _on_worker_series_ready(self, worker: LoadWorker, series_list: list):
+        if worker is not self.worker:
+            return
+        self._on_data_loaded(series_list)
+
+    def _start_worker(self):
+        self._last_worker_error = ''
+        self._worker_warning_count = 0
+        worker = LoadWorker(self.loader_api)
+        worker.progress.connect(lambda text, w=worker: self._on_worker_progress(w, text))
+        worker.series_ready.connect(lambda data, w=worker: self._on_worker_series_ready(w, data))
+        self.worker = worker
+        worker.start()
+
+    def _stop_worker(self, timeout_ms: int = 5000) -> bool:
+        worker = self.worker
+        if not worker or not worker.isRunning():
+            return True
+        worker.requestInterruption()
+        return worker.wait(timeout_ms)
 
     @staticmethod
     def _make_row(cols: int) -> list:
@@ -1083,7 +1248,12 @@ class MainWindow(QMainWindow):
         self.model.removeRows(0, self.model.rowCount())
 
         if not series_list:
-            self.status_label.setText('No series with downloaded episodes found.')
+            if self._last_worker_error:
+                self.status_label.setText(self._last_worker_error)
+            elif self._worker_warning_count:
+                self.status_label.setText(f'No series loaded ({self._worker_warning_count} warnings)')
+            else:
+                self.status_label.setText('No series with downloaded episodes found.')
             return
 
         total_series = len(series_list)
@@ -1232,7 +1402,10 @@ class MainWindow(QMainWindow):
         else:
             self._apply_default_column_widths()
 
-        self.status_label.setText(f'{total_series} series loaded')
+        status_text = f'{total_series} series loaded'
+        if self._worker_warning_count:
+            status_text += f' ({self._worker_warning_count} warnings)'
+        self.status_label.setText(status_text)
 
         # apply initial missing visibility
         self._apply_missing_visibility(self.chk_show_missing.isChecked())
@@ -1406,8 +1579,11 @@ class MainWindow(QMainWindow):
                 self.api.update_series(series_data)
                 self._update_mon_column(item, False)
                 # also unmonitor episodes in this season
-                self._unmonitor_season_episodes(item)
-                self.status_label.setText(f'Unmonitored: {item.text()}')
+                failures = self._unmonitor_season_episodes(item)
+                msg = f'Unmonitored: {item.text()}'
+                if failures:
+                    msg += f' ({failures} episode update errors)'
+                self.status_label.setText(msg)
             elif node_type == 'episode':
                 ep_data_list = item.data(ROLE_EPISODE_DATA) or []
                 for ep in ep_data_list:
@@ -1418,8 +1594,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to unmonitor:\n{e}')
 
-    def _unmonitor_season_episodes(self, season_item: QStandardItem):
+    def _unmonitor_season_episodes(self, season_item: QStandardItem) -> int:
         """Unmonitor all episodes under a season item."""
+        failures = 0
         for row in range(season_item.rowCount()):
             ep_item = season_item.child(row, 0)
             ep_data_list = ep_item.data(ROLE_EPISODE_DATA) or []
@@ -1428,8 +1605,9 @@ class MainWindow(QMainWindow):
                 try:
                     self.api.update_episode(ep)
                 except Exception:
-                    pass
+                    failures += 1
             self._update_mon_column(ep_item, False)
+        return failures
 
     def _ctx_auto_search(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
@@ -1515,6 +1693,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            api_failures = 0
             if node_type == 'series':
                 series_path = item.data(ROLE_SERIES_PATH)
                 # delete episode files from Sonarr DB
@@ -1527,12 +1706,15 @@ class MainWindow(QMainWindow):
                             try:
                                 self.api.delete_episode_file(file_id)
                             except Exception:
-                                pass
+                                api_failures += 1
                 if series_path and os.path.isdir(series_path):
                     shutil.rmtree(series_path, ignore_errors=True)
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                self.status_label.setText(f'Deleted from disk: {label}')
+                msg = f'Deleted from disk: {label}'
+                if api_failures:
+                    msg += f' ({api_failures} API delete errors)'
+                self.status_label.setText(msg)
 
             elif node_type == 'season':
                 season_path = item.data(ROLE_SEASON_PATH)
@@ -1543,12 +1725,15 @@ class MainWindow(QMainWindow):
                         try:
                             self.api.delete_episode_file(file_id)
                         except Exception:
-                            pass
+                            api_failures += 1
                 if season_path and os.path.isdir(season_path):
                     shutil.rmtree(season_path, ignore_errors=True)
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                self.status_label.setText(f'Deleted from disk: {label}')
+                msg = f'Deleted from disk: {label}'
+                if api_failures:
+                    msg += f' ({api_failures} API delete errors)'
+                self.status_label.setText(msg)
 
             elif node_type == 'episode':
                 file_id = item.data(ROLE_FILE_ID)
@@ -1557,7 +1742,7 @@ class MainWindow(QMainWindow):
                     try:
                         self.api.delete_episode_file(file_id)
                     except Exception:
-                        pass
+                        api_failures += 1
                 if file_path and os.path.isfile(file_path):
                     try:
                         os.remove(file_path)
@@ -1565,7 +1750,10 @@ class MainWindow(QMainWindow):
                         pass
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                self.status_label.setText(f'Deleted from disk: {label}')
+                msg = f'Deleted from disk: {label}'
+                if api_failures:
+                    msg += f' ({api_failures} API delete errors)'
+                self.status_label.setText(msg)
 
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed:\n{e}')
@@ -1640,11 +1828,15 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            api_failures = 0
             if node_type == 'series':
                 self.api.delete_series(series_id, delete_files=True)
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                self.status_label.setText(f'Deleted & unmonitored: {label}')
+                msg = f'Deleted & unmonitored: {label}'
+                if api_failures:
+                    msg += f' ({api_failures} API errors)'
+                self.status_label.setText(msg)
 
             elif node_type == 'season':
                 season_num = item.data(ROLE_SEASON_NUM)
@@ -1658,10 +1850,10 @@ class MainWindow(QMainWindow):
                         try:
                             self.api.delete_episode_file(file_id)
                         except Exception:
-                            pass
+                            api_failures += 1
 
                 # unmonitor episodes
-                self._unmonitor_season_episodes(item)
+                api_failures += self._unmonitor_season_episodes(item)
 
                 # unmonitor the season
                 try:
@@ -1672,7 +1864,7 @@ class MainWindow(QMainWindow):
                             break
                     self.api.update_series(series_data)
                 except Exception:
-                    pass
+                    api_failures += 1
 
                 # delete season directory
                 if season_path and os.path.isdir(season_path):
@@ -1680,7 +1872,10 @@ class MainWindow(QMainWindow):
 
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                self.status_label.setText(f'Deleted & unmonitored: {label}')
+                msg = f'Deleted & unmonitored: {label}'
+                if api_failures:
+                    msg += f' ({api_failures} API errors)'
+                self.status_label.setText(msg)
 
             elif node_type == 'episode':
                 file_id = item.data(ROLE_FILE_ID)
@@ -1692,13 +1887,13 @@ class MainWindow(QMainWindow):
                     try:
                         self.api.update_episode(ep)
                     except Exception:
-                        pass
+                        api_failures += 1
                 # delete file from Sonarr
                 if file_id:
                     try:
                         self.api.delete_episode_file(file_id)
                     except Exception:
-                        pass
+                        api_failures += 1
                 # delete from disk
                 if file_path and os.path.isfile(file_path):
                     try:
@@ -1707,7 +1902,10 @@ class MainWindow(QMainWindow):
                         pass
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                self.status_label.setText(f'Deleted & unmonitored: {label}')
+                msg = f'Deleted & unmonitored: {label}'
+                if api_failures:
+                    msg += f' ({api_failures} API errors)'
+                self.status_label.setText(msg)
 
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed:\n{e}')
@@ -1798,37 +1996,68 @@ class MainWindow(QMainWindow):
         """Save column widths and stop worker before closing."""
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
         self._settings.setValue('column_widths', widths)
-        if self.worker.isRunning():
-            self.worker.requestInterruption()
-            self.worker.wait(5000)
+        if not self._stop_worker(5000):
+            reply = QMessageBox.question(
+                self,
+                'Background task still running',
+                'A refresh is still in progress and did not stop in time.\n'
+                'Force close now?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+            worker = self.worker
+            if worker and worker.isRunning():
+                worker.terminate()
+                worker.wait(1500)
+                if worker.isRunning():
+                    QMessageBox.critical(
+                        self,
+                        'Unable to close safely',
+                        'Background thread is still running after force-close attempt.\n'
+                        'Please try closing again in a few seconds.',
+                    )
+                    event.ignore()
+                    return
+            self.worker = None
         super().closeEvent(event)
 
     def _clear_cache_and_refresh(self):
         """Clear the ffprobe cache and reload all data."""
+        if not self._stop_worker(5000):
+            QMessageBox.warning(
+                self,
+                'Refresh still running',
+                'Cannot clear cache while a refresh is still running.\n'
+                'Please wait and try again.',
+            )
+            self.status_label.setText('Refresh still running; try again in a moment')
+            return
         global _probe_cache
-        _probe_cache = {}
-        _save_probe_cache()
-        self.status_label.setText('Cache cleared, refreshing…')
+        with _probe_cache_lock:
+            _probe_cache = {}
+        _save_probe_cache(replace=True)
+        self.status_label.setText('Cache cleared, refreshing...')
         self._refresh()
 
     def _refresh(self):
         """Reload all data from Sonarr."""
-        if self.worker.isRunning():
-            try:
-                self.worker.progress.disconnect()
-                self.worker.series_ready.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            self.worker.requestInterruption()
-            self.worker.wait(5000)
+        if not self._stop_worker(5000):
+            QMessageBox.warning(
+                self,
+                'Refresh still running',
+                'Previous refresh is still stopping.\n'
+                'Please try again in a few seconds.',
+            )
+            self.status_label.setText('Previous refresh still stopping; try again')
+            return
         self.model.removeRows(0, self.model.rowCount())
         self.progress_bar.show()
         self.progress_bar.setRange(0, 0)
-        self.status_label.setText('Refreshing…')
-        self.worker = LoadWorker(self.api)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.series_ready.connect(self._on_data_loaded)
-        self.worker.start()
+        self.status_label.setText('Refreshing...')
+        self._start_worker()
 
 
 # ── entry point ────────────────────────────────────────────────────
@@ -1880,15 +2109,24 @@ def main():
         print(f'\nPlease edit {config_path}')
         sys.exit(1)
 
+    # Shorter timeout on UI actions to reduce main-thread stalls.
     api = SonarrAPI(
         sonarr['url'], sonarr['api_key'],
         http_user=sonarr.get('http_basic_auth_username', ''),
         http_pass=sonarr.get('http_basic_auth_password', ''),
+        request_timeout=(3, 8),
+    )
+    # Loader runs in a background thread and can use a longer timeout.
+    loader_api = SonarrAPI(
+        sonarr['url'], sonarr['api_key'],
+        http_user=sonarr.get('http_basic_auth_username', ''),
+        http_pass=sonarr.get('http_basic_auth_password', ''),
+        request_timeout=(5, 30),
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle('Fusion')
-    win = MainWindow(api, settings=config.get('settings', {}))
+    win = MainWindow(api, loader_api=loader_api, settings=config.get('settings', {}))
     win.showMaximized()
     sys.exit(app.exec())
 
