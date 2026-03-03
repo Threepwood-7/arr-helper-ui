@@ -71,7 +71,8 @@ def _acquire_lock_file(lock_path: str, timeout_s: float = 10.0) -> tuple[int, st
                         owner_pid = 0
                     if owner_pid and not _pid_is_running(owner_pid):
                         stale = True
-                    elif age > 3600:
+                    elif not owner_pid and age > 3600:
+                        # Legacy or corrupted lock format with no owner pid.
                         stale = True
             except OSError:
                 pass

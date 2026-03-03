@@ -183,7 +183,8 @@ def _acquire_probe_lock(timeout_s: float = 10.0) -> tuple[int, str]:
                         owner_pid = 0
                     if owner_pid and not _pid_is_running(owner_pid):
                         stale = True
-                    elif age > 3600:
+                    elif not owner_pid and age > 3600:
+                        # Legacy or corrupted lock format with no owner pid.
                         stale = True
             except OSError:
                 pass
@@ -279,9 +280,14 @@ def probe_file(file_path: str) -> Dict:
     # check cache — keyed by path, invalidated if size changed or fields missing
     with _probe_cache_lock:
         cached = _probe_cache.get(file_path)
-    if cached and cached.get('size_bytes') == info['size_bytes'] and 'video_resolution' in cached:
+    if (
+        cached
+        and cached.get('size_bytes') == info['size_bytes']
+        and cached.get('_probe_ok') is True
+    ):
         return cached
 
+    probe_ok = False
     try:
         cmd = [
             _FFPROBE or 'ffprobe', '-v', 'quiet', '-print_format', 'json',
@@ -297,6 +303,7 @@ def probe_file(file_path: str) -> Dict:
         if result.returncode != 0:
             return info
         data = json.loads(result.stdout)
+        probe_ok = True
         for s in data.get('streams', []):
             codec_type = s.get('codec_type', '')
             lang = s.get('tags', {}).get('language', '')
@@ -343,8 +350,10 @@ def probe_file(file_path: str) -> Dict:
     except Exception:
         pass
 
-    with _probe_cache_lock:
-        _probe_cache[file_path] = info
+    if probe_ok:
+        info['_probe_ok'] = True
+        with _probe_cache_lock:
+            _probe_cache[file_path] = info
     return info
 
 
