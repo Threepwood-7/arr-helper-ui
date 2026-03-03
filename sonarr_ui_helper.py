@@ -127,6 +127,8 @@ class SonarrAPI:
 # ── ffprobe cache & helper ──────────────────────────────────────────
 
 _FFPROBE: str | None = None          # resolved at startup in main()
+SETTINGS_ORG_NAME = 'SonarrUIHelper'
+SETTINGS_APP_NAME = 'SonarrUIHelper'
 
 
 def _get_app_cache_dir() -> str:
@@ -914,7 +916,13 @@ class MainWindow(QMainWindow):
         self.api = api
         self.loader_api = loader_api or api
         self.cfg = settings or {}
-        self._settings = QSettings('SonarrUIHelper', 'SonarrUIHelper')
+        self.preferences_store = QSettings(
+            QSettings.IniFormat,
+            QSettings.UserScope,
+            SETTINGS_ORG_NAME,
+            SETTINGS_APP_NAME,
+        )
+        self._settings = self.preferences_store
         self.setWindowTitle('Sonarr UI Helper')
         self.resize(1600, 800)
         self._last_worker_error = ''
@@ -1045,6 +1053,8 @@ class MainWindow(QMainWindow):
         self.act_show_missing.setShortcut(QKeySequence('Ctrl+M'))
         self.act_show_missing.toggled.connect(self._toggle_missing_from_menu)
         view_menu.addAction(self.act_show_missing)
+        act = view_menu.addAction('Fit &Columns')
+        act.triggered.connect(self._fit_columns)
         act = view_menu.addAction('&Reset View')
         act.setShortcut(QKeySequence('Ctrl+Shift+R'))
         act.triggered.connect(self._reset_view_settings)
@@ -1079,6 +1089,11 @@ class MainWindow(QMainWindow):
         act.setShortcut(QKeySequence('O'))
         act.triggered.connect(self._on_enter)
 
+        # Tools menu
+        tools_menu = mb.addMenu('&Tools')
+        act = tools_menu.addAction('Edit .ini file')
+        act.triggered.connect(self._edit_ini_file)
+
         # Help menu
         help_menu = mb.addMenu('&Help')
         act = help_menu.addAction('&Keyboard Shortcuts')
@@ -1108,6 +1123,18 @@ class MainWindow(QMainWindow):
         self.chk_show_missing.setChecked(False)
         self._apply_default_column_widths()
         self.status_label.setText('View settings reset to defaults')
+
+    def _edit_ini_file(self):
+        self._settings.sync()
+        ini_path = Path(self.preferences_store.fileName())
+        try:
+            ini_path.parent.mkdir(parents=True, exist_ok=True)
+            ini_path.touch(exist_ok=True)
+            _open_path(str(ini_path))
+            self.status_label.setText(f'Opened settings file: {ini_path}')
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to open settings file:\n{e}')
+            self.status_label.setText('Failed to open settings file')
 
     def _ctx_on_selected(self, action_name: str):
         """Dispatch a context-menu action on the currently selected tree item."""
@@ -1251,6 +1278,12 @@ class MainWindow(QMainWindow):
         self.tree.setColumnWidth(0, 600)
         for col in range(1, len(self._columns)):
             self.tree.resizeColumnToContents(col)
+
+    def _fit_columns(self):
+        """Resize all tree columns to fit their current contents."""
+        for col in range(len(self._columns)):
+            self.tree.resizeColumnToContents(col)
+        self.status_label.setText('Columns fitted to contents')
 
     def _on_data_loaded(self, series_list: list):
         self.progress_bar.hide()
@@ -2005,6 +2038,7 @@ class MainWindow(QMainWindow):
         """Save column widths and stop worker before closing."""
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
         self._settings.setValue('column_widths', widths)
+        self._settings.sync()
         if not self._stop_worker(5000):
             reply = QMessageBox.question(
                 self,

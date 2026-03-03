@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox
 
@@ -84,3 +86,34 @@ def test_close_event_force_close_blocks_if_worker_still_running(qtbot, monkeypat
     assert not event.isAccepted()
     assert stuck.terminate_called is True
     assert len(critical_calls) == 1
+
+
+def test_mainwindow_uses_ini_qsettings_backend(qtbot, monkeypatch):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+
+    win = sui.MainWindow(_MinimalAPI(), settings={})
+    qtbot.addWidget(win)
+
+    ini_path = Path(win.preferences_store.fileName())
+    assert win.preferences_store.format() == sui.QSettings.IniFormat
+    assert ini_path.suffix.lower() == ".ini"
+    assert ini_path.stem == sui.SETTINGS_APP_NAME
+    assert win._settings is win.preferences_store
+
+
+def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+
+    opened = []
+    monkeypatch.setattr(sui, "_open_path", lambda path: opened.append(path))
+
+    win = sui.MainWindow(_MinimalAPI(), settings={})
+    qtbot.addWidget(win)
+    ini_path = Path(win.preferences_store.fileName())
+
+    tools_action = next(act for act in win.menuBar().actions() if act.text() == "&Tools")
+    edit_action = next(act for act in tools_action.menu().actions() if act.text() == "Edit .ini file")
+    edit_action.trigger()
+
+    assert ini_path.exists()
+    assert opened == [str(ini_path)]
