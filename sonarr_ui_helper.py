@@ -39,7 +39,7 @@ class SonarrAPI:
         api_key: str,
         http_user: str = '',
         http_pass: str = '',
-        request_timeout: int | tuple = (5, 30),
+        request_timeout: int | tuple = 120,
     ):
         self.url = url.rstrip('/')
         self.api_key = api_key
@@ -2439,19 +2439,19 @@ def main():
         print(f'\nPlease edit {config_path}')
         sys.exit(1)
 
-    # Shorter timeout on UI actions to reduce main-thread stalls.
+    # Use a consistent 120s HTTP timeout for Sonarr calls.
     api = SonarrAPI(
         sonarr['url'], sonarr['api_key'],
         http_user=sonarr.get('http_basic_auth_username', ''),
         http_pass=sonarr.get('http_basic_auth_password', ''),
-        request_timeout=(3, 8),
+        request_timeout=120,
     )
-    # Loader runs in a background thread and can use a longer timeout.
+    # Loader uses the same Sonarr timeout.
     loader_api = SonarrAPI(
         sonarr['url'], sonarr['api_key'],
         http_user=sonarr.get('http_basic_auth_username', ''),
         http_pass=sonarr.get('http_basic_auth_password', ''),
-        request_timeout=(5, 30),
+        request_timeout=120,
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
