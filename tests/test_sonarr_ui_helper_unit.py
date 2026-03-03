@@ -173,6 +173,45 @@ def test_probe_file_does_not_cache_failed_probe(monkeypatch, tmp_path):
     assert second.get("_probe_ok") is True
 
 
+def test_probe_file_handles_non_numeric_bitrate_and_uses_cache(monkeypatch, tmp_path):
+    media = tmp_path / "d.mkv"
+    media.write_bytes(b"abcdef")
+    monkeypatch.setattr(sui, "_probe_cache", {})
+
+    calls = {"n": 0}
+
+    class _OkResult:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "hevc",
+                        "width": 1920,
+                        "height": 1080,
+                        "bit_rate": "N/A",
+                    }
+                ],
+                "format": {"bit_rate": "9000000"},
+            }
+        )
+
+    def _run(*_args, **_kwargs):
+        calls["n"] += 1
+        return _OkResult()
+
+    monkeypatch.setattr(sui.subprocess, "run", _run)
+
+    first = sui.probe_file(str(media))
+    second = sui.probe_file(str(media))
+
+    assert calls["n"] == 1
+    assert first["video_bitrate"] == "9000 kbps"
+    assert second["video_bitrate"] == "9000 kbps"
+    assert second.get("_probe_ok") is True
+
+
 class _APIGetSeriesError:
     def get_series(self):
         raise RuntimeError("boom")

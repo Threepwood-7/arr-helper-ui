@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 import tomli
@@ -106,6 +106,12 @@ class SonarrAPI:
 
     def get_release(self, episode_id: int) -> List[dict]:
         return self._get(f'release?episodeId={episode_id}')
+
+    def get_release_by_series(self, series_id: int) -> List[dict]:
+        return self._get(f'release?seriesId={series_id}')
+
+    def get_release_by_season(self, series_id: int, season_number: int) -> List[dict]:
+        return self._get(f'release?seriesId={series_id}&seasonNumber={season_number}')
 
     def download_release(self, guid: str, indexer_id: int) -> dict:
         return self._post('release', {'guid': guid, 'indexerId': indexer_id})
@@ -261,6 +267,23 @@ def _save_probe_cache(replace: bool = False):
             _release_probe_lock(lock_fd, lock_token)
 
 
+def _as_int(value: Any) -> int:
+    """Parse ffprobe-style numeric fields safely (e.g. 'N/A' -> 0)."""
+    try:
+        if value is None:
+            return 0
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if not text or text.lower() in {'n/a', 'na', 'none', 'null'}:
+            return 0
+        return int(float(text))
+    except (TypeError, ValueError):
+        return 0
+
+
 def probe_file(file_path: str) -> Dict:
     """Return dict with codecs, resolution, bitrates, HDR, languages, size."""
     info: Dict = {
@@ -289,7 +312,6 @@ def probe_file(file_path: str) -> Dict:
     ):
         return cached
 
-    probe_ok = False
     try:
         cmd = [
             _FFPROBE or 'ffprobe', '-v', 'quiet', '-print_format', 'json',
@@ -305,19 +327,31 @@ def probe_file(file_path: str) -> Dict:
         if result.returncode != 0:
             return info
         data = json.loads(result.stdout)
-        probe_ok = True
+
+        parsed: Dict = {
+            'video_codec': '',
+            'video_resolution': '',
+            'video_bitrate': '',
+            'audio_codec': '',
+            'audio_bitrate': '',
+            'hdr': '',
+            'audio_langs': [],
+            'sub_langs': [],
+            'size_bytes': info['size_bytes'],
+        }
+
         for s in data.get('streams', []):
             codec_type = s.get('codec_type', '')
             lang = s.get('tags', {}).get('language', '')
-            if codec_type == 'video' and not info['video_codec']:
-                info['video_codec'] = s.get('codec_name', '').upper()
-                w = s.get('width', 0)
-                h = s.get('height', 0)
+            if codec_type == 'video' and not parsed['video_codec']:
+                parsed['video_codec'] = s.get('codec_name', '').upper()
+                w = _as_int(s.get('width', 0))
+                h = _as_int(s.get('height', 0))
                 if w and h:
-                    info['video_resolution'] = f'{w}x{h}'
-                vbr = int(s.get('bit_rate', 0) or 0)
+                    parsed['video_resolution'] = f'{w}x{h}'
+                vbr = _as_int(s.get('bit_rate', 0))
                 if vbr:
-                    info['video_bitrate'] = f'{vbr // 1000} kbps'
+                    parsed['video_bitrate'] = f'{vbr // 1000} kbps'
                 color_transfer = s.get('color_transfer', '')
                 color_space = s.get('color_space', '')
                 side_data = s.get('side_data_list', [])
@@ -328,35 +362,34 @@ def probe_file(file_path: str) -> Dict:
                     for sd in side_data
                 ) if side_data else False
                 if has_dovi:
-                    info['hdr'] = 'DV'
+                    parsed['hdr'] = 'DV'
                 elif has_hdr_transfer or has_hdr_space:
-                    info['hdr'] = 'HDR'
+                    parsed['hdr'] = 'HDR'
                 else:
-                    info['hdr'] = 'SDR'
+                    parsed['hdr'] = 'SDR'
             elif codec_type == 'audio':
-                if not info['audio_codec']:
-                    info['audio_codec'] = s.get('codec_name', '').upper()
-                    abr = int(s.get('bit_rate', 0) or 0)
+                if not parsed['audio_codec']:
+                    parsed['audio_codec'] = s.get('codec_name', '').upper()
+                    abr = _as_int(s.get('bit_rate', 0))
                     if abr:
-                        info['audio_bitrate'] = f'{abr // 1000} kbps'
+                        parsed['audio_bitrate'] = f'{abr // 1000} kbps'
                 if lang:
-                    info['audio_langs'].append(lang)
+                    parsed['audio_langs'].append(lang)
             elif codec_type == 'subtitle':
                 if lang:
-                    info['sub_langs'].append(lang)
+                    parsed['sub_langs'].append(lang)
 
-        if not info['video_bitrate']:
-            fmt_br = int(data.get('format', {}).get('bit_rate', 0) or 0)
+        if not parsed['video_bitrate']:
+            fmt_br = _as_int(data.get('format', {}).get('bit_rate', 0))
             if fmt_br:
-                info['video_bitrate'] = f'{fmt_br // 1000} kbps'
+                parsed['video_bitrate'] = f'{fmt_br // 1000} kbps'
     except Exception:
-        pass
+        return info
 
-    if probe_ok:
-        info['_probe_ok'] = True
-        with _probe_cache_lock:
-            _probe_cache[file_path] = info
-    return info
+    parsed['_probe_ok'] = True
+    with _probe_cache_lock:
+        _probe_cache[file_path] = parsed
+    return parsed
 
 
 def _open_path(path: str):
@@ -521,6 +554,22 @@ class LoadWorker(QThread):
                 return
             self.progress.emit(f'Error: unexpected loader failure: {e}')
             self.series_ready.emit([])
+
+
+class ApiActionWorker(QThread):
+    """Runs a Sonarr API action off the UI thread and returns result/error."""
+    finished_action = Signal(object, object)  # result, error
+
+    def __init__(self, action: Callable[[], Any]):
+        super().__init__()
+        self._action = action
+
+    def run(self):
+        try:
+            result = self._action()
+            self.finished_action.emit(result, None)
+        except Exception as e:
+            self.finished_action.emit(None, e)
 
 
 # ── Custom data roles ──────────────────────────────────────────────
@@ -1009,6 +1058,7 @@ class MainWindow(QMainWindow):
 
         # start loading
         self.worker: Optional[LoadWorker] = None
+        self.action_worker: Optional[ApiActionWorker] = None
         self._start_worker()
 
     # ── menu bar ───────────────────────────────────────────────
@@ -1138,6 +1188,8 @@ class MainWindow(QMainWindow):
 
     def _ctx_on_selected(self, action_name: str):
         """Dispatch a context-menu action on the currently selected tree item."""
+        if not self._ensure_action_idle():
+            return
         item = self._current_item()
         if not item:
             self.status_label.setText('No item selected')
@@ -1241,6 +1293,54 @@ class MainWindow(QMainWindow):
             return True
         worker.requestInterruption()
         return worker.wait(timeout_ms)
+
+    def _action_in_progress(self) -> bool:
+        return bool(self.action_worker and self.action_worker.isRunning())
+
+    def _ensure_action_idle(self, status_text: str = 'Another action is still running') -> bool:
+        if self._action_in_progress():
+            self.status_label.setText(status_text)
+            return False
+        return True
+
+    def _stop_action_worker(self, timeout_ms: int = 5000) -> bool:
+        worker = self.action_worker
+        if not worker or not worker.isRunning():
+            return True
+        return worker.wait(timeout_ms)
+
+    def _run_api_action(
+        self,
+        start_text: str,
+        action: Callable[[], Any],
+        on_success: Callable[[Any], None],
+        error_text: str,
+    ) -> bool:
+        if not self._ensure_action_idle():
+            return False
+
+        worker = ApiActionWorker(action)
+        self.action_worker = worker
+        self.status_label.setText(start_text)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        def _on_done(result: Any, error: Any, w: ApiActionWorker = worker):
+            if self.action_worker is not w:
+                return
+            self.action_worker = None
+            QApplication.restoreOverrideCursor()
+            try:
+                if error is not None:
+                    QMessageBox.critical(self, 'Error', f'{error_text}:\n{error}')
+                    self.status_label.setText(error_text)
+                    return
+                on_success(result)
+            finally:
+                w.deleteLater()
+
+        worker.finished_action.connect(_on_done)
+        worker.start()
+        return True
 
     @staticmethod
     def _make_row(cols: int) -> list:
@@ -1524,6 +1624,8 @@ class MainWindow(QMainWindow):
     # ── context menu ───────────────────────────────────────────
 
     def _on_context_menu(self, pos):
+        if not self._ensure_action_idle():
+            return
         index = self.tree.indexAt(pos)
         if not index.isValid():
             return
@@ -1573,157 +1675,280 @@ class MainWindow(QMainWindow):
         if mon_item:
             mon_item.setText('Y' if monitored else 'N')
 
+    @staticmethod
+    def _clone_episode_payloads(raw_payloads: Any) -> List[dict]:
+        payloads: List[dict] = []
+        for ep in raw_payloads or []:
+            if isinstance(ep, dict):
+                payloads.append(dict(ep))
+        return payloads
+
+    def _collect_episode_payloads(self, parent_item: QStandardItem) -> List[dict]:
+        payloads: List[dict] = []
+        for row in range(parent_item.rowCount()):
+            ep_item = parent_item.child(row, 0)
+            payloads.extend(self._clone_episode_payloads(ep_item.data(ROLE_EPISODE_DATA)))
+        return payloads
+
+    @staticmethod
+    def _delete_tree_path(path: str) -> tuple[bool, str]:
+        if not path:
+            return True, ''
+        if not os.path.exists(path):
+            return True, ''
+        try:
+            shutil.rmtree(path)
+        except Exception as e:
+            if os.path.exists(path):
+                return False, str(e)
+        if os.path.exists(path):
+            return False, 'Directory still exists after delete attempt.'
+        return True, ''
+
+    @staticmethod
+    def _delete_file_path(path: str) -> tuple[bool, str]:
+        if not path:
+            return True, ''
+        if not os.path.exists(path):
+            return True, ''
+        try:
+            os.remove(path)
+        except Exception as e:
+            if os.path.exists(path):
+                return False, str(e)
+        if os.path.exists(path):
+            return False, 'File still exists after delete attempt.'
+        return True, ''
+
     def _ctx_monitor(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
-        try:
-            if node_type == 'series':
+        label = item.text()
+
+        if node_type == 'series':
+            def _action():
                 series_data = self.api.get_series_by_id(series_id)
                 series_data['monitored'] = True
                 self.api.update_series(series_data)
+                return None
+
+            def _on_success(_result):
                 self._update_mon_column(item, True)
-                self.status_label.setText(f'Monitored: {item.text()}')
-            elif node_type == 'season':
-                season_num = item.data(ROLE_SEASON_NUM)
+                self.status_label.setText(f'Monitored: {label}')
+
+            self._run_api_action(f'Monitoring: {label}...', _action, _on_success, 'Failed to monitor')
+            return
+
+        if node_type == 'season':
+            season_num = item.data(ROLE_SEASON_NUM)
+
+            def _action():
                 series_data = self.api.get_series_by_id(series_id)
                 for s in series_data.get('seasons', []):
                     if s.get('seasonNumber') == season_num:
                         s['monitored'] = True
                         break
                 self.api.update_series(series_data)
+                return None
+
+            def _on_success(_result):
                 self._update_mon_column(item, True)
-                self.status_label.setText(f'Monitored: {item.text()}')
-            elif node_type == 'episode':
-                ep_data_list = item.data(ROLE_EPISODE_DATA) or []
-                for ep in ep_data_list:
+                self.status_label.setText(f'Monitored: {label}')
+
+            self._run_api_action(f'Monitoring: {label}...', _action, _on_success, 'Failed to monitor')
+            return
+
+        if node_type == 'episode':
+            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            if not ep_payloads:
+                self.status_label.setText('No episode payload found for monitor action')
+                return
+
+            def _action():
+                for ep in ep_payloads:
                     ep['monitored'] = True
                     self.api.update_episode(ep)
+                return None
+
+            def _on_success(_result):
                 self._update_mon_column(item, True)
-                self.status_label.setText(f'Monitored: {item.text()}')
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to monitor:\n{e}')
+                self.status_label.setText(f'Monitored: {label}')
+
+            self._run_api_action(f'Monitoring: {label}...', _action, _on_success, 'Failed to monitor')
 
     def _ctx_unmonitor(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
-        try:
-            if node_type == 'series':
+        label = item.text()
+
+        if node_type == 'series':
+            def _action():
                 series_data = self.api.get_series_by_id(series_id)
                 series_data['monitored'] = False
                 self.api.update_series(series_data)
+                return {'episode_failures': 0}
+
+            def _on_success(result):
                 self._update_mon_column(item, False)
-                self.status_label.setText(f'Unmonitored: {item.text()}')
-            elif node_type == 'season':
-                season_num = item.data(ROLE_SEASON_NUM)
+                msg = f'Unmonitored: {label}'
+                failures = result.get('episode_failures', 0)
+                if failures:
+                    msg += f' ({failures} episode update errors)'
+                self.status_label.setText(msg)
+
+            self._run_api_action(f'Unmonitoring: {label}...', _action, _on_success, 'Failed to unmonitor')
+            return
+
+        if node_type == 'season':
+            season_num = item.data(ROLE_SEASON_NUM)
+            season_episodes = self._collect_episode_payloads(item)
+
+            def _action():
                 series_data = self.api.get_series_by_id(series_id)
                 for s in series_data.get('seasons', []):
                     if s.get('seasonNumber') == season_num:
                         s['monitored'] = False
                         break
                 self.api.update_series(series_data)
+                failures = 0
+                for ep in season_episodes:
+                    ep['monitored'] = False
+                    try:
+                        self.api.update_episode(ep)
+                    except Exception:
+                        failures += 1
+                return {'episode_failures': failures}
+
+            def _on_success(result):
                 self._update_mon_column(item, False)
-                # also unmonitor episodes in this season
-                failures = self._unmonitor_season_episodes(item)
-                msg = f'Unmonitored: {item.text()}'
+                for row in range(item.rowCount()):
+                    ep_item = item.child(row, 0)
+                    self._update_mon_column(ep_item, False)
+                msg = f'Unmonitored: {label}'
+                failures = result.get('episode_failures', 0)
                 if failures:
                     msg += f' ({failures} episode update errors)'
                 self.status_label.setText(msg)
-            elif node_type == 'episode':
-                ep_data_list = item.data(ROLE_EPISODE_DATA) or []
-                for ep in ep_data_list:
+
+            self._run_api_action(f'Unmonitoring: {label}...', _action, _on_success, 'Failed to unmonitor')
+            return
+
+        if node_type == 'episode':
+            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            if not ep_payloads:
+                self.status_label.setText('No episode payload found for unmonitor action')
+                return
+
+            def _action():
+                for ep in ep_payloads:
                     ep['monitored'] = False
                     self.api.update_episode(ep)
-                self._update_mon_column(item, False)
-                self.status_label.setText(f'Unmonitored: {item.text()}')
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to unmonitor:\n{e}')
+                return {'episode_failures': 0}
 
-    def _unmonitor_season_episodes(self, season_item: QStandardItem) -> int:
-        """Unmonitor all episodes under a season item."""
-        failures = 0
-        for row in range(season_item.rowCount()):
-            ep_item = season_item.child(row, 0)
-            ep_data_list = ep_item.data(ROLE_EPISODE_DATA) or []
-            for ep in ep_data_list:
-                ep['monitored'] = False
-                try:
-                    self.api.update_episode(ep)
-                except Exception:
-                    failures += 1
-            self._update_mon_column(ep_item, False)
-        return failures
+            def _on_success(_result):
+                self._update_mon_column(item, False)
+                self.status_label.setText(f'Unmonitored: {label}')
+
+            self._run_api_action(f'Unmonitoring: {label}...', _action, _on_success, 'Failed to unmonitor')
 
     def _ctx_auto_search(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
-        try:
-            if node_type == 'series':
+        label = item.text()
+
+        if node_type == 'series':
+            def _action():
                 self.api.series_search(series_id)
-                self.status_label.setText(f'Auto search started: {item.text()}')
-            elif node_type == 'season':
-                season_num = item.data(ROLE_SEASON_NUM)
+                return None
+
+            def _on_success(_result):
+                self.status_label.setText(f'Auto search started: {label}')
+
+            self._run_api_action(f'Starting auto search: {label}...', _action, _on_success, 'Auto search failed')
+            return
+
+        if node_type == 'season':
+            season_num = item.data(ROLE_SEASON_NUM)
+
+            def _action():
                 self.api.season_search(series_id, season_num)
-                self.status_label.setText(f'Auto search started: {item.text()}')
-            elif node_type == 'episode':
-                ep_data_list = item.data(ROLE_EPISODE_DATA) or []
-                ep_ids = [ep['id'] for ep in ep_data_list if 'id' in ep]
-                if ep_ids:
-                    self.api.episode_search(ep_ids)
-                    self.status_label.setText(f'Auto search started: {item.text()}')
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Auto search failed:\n{e}')
+                return None
+
+            def _on_success(_result):
+                self.status_label.setText(f'Auto search started: {label}')
+
+            self._run_api_action(f'Starting auto search: {label}...', _action, _on_success, 'Auto search failed')
+            return
+
+        if node_type == 'episode':
+            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            ep_ids = [ep['id'] for ep in ep_payloads if 'id' in ep]
+            if not ep_ids:
+                QMessageBox.warning(self, 'No Episodes', 'No episode IDs found for auto search.')
+                return
+
+            def _action():
+                self.api.episode_search(ep_ids)
+                return None
+
+            def _on_success(_result):
+                self.status_label.setText(f'Auto search started: {label}')
+
+            self._run_api_action(f'Starting auto search: {label}...', _action, _on_success, 'Auto search failed')
 
     def _ctx_manual_search(self, item: QStandardItem, node_type: str):
-        # get episode ids to search for
-        ep_ids = []
+        label = item.text()
+        series_id = item.data(ROLE_SERIES_ID)
+        season_num = item.data(ROLE_SEASON_NUM)
         if node_type == 'episode':
-            ep_data_list = item.data(ROLE_EPISODE_DATA) or []
-            ep_ids = [ep['id'] for ep in ep_data_list if 'id' in ep]
+            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            ep_ids = [ep['id'] for ep in ep_payloads if 'id' in ep]
+            if not ep_ids:
+                QMessageBox.warning(self, 'No Episodes', 'No episode IDs found for manual search.')
+                return
+            query_label = 'episode'
+            def _search_action():
+                return self.api.get_release(ep_ids[0])
         elif node_type == 'season':
-            # collect all episode ids from child items
-            for row in range(item.rowCount()):
-                ep_item = item.child(row, 0)
-                ep_data_list = ep_item.data(ROLE_EPISODE_DATA) or []
-                ep_ids.extend(ep['id'] for ep in ep_data_list if 'id' in ep)
+            if series_id is None or season_num is None:
+                QMessageBox.warning(self, 'No Series/Season', 'No series/season info found for manual search.')
+                return
+            query_label = 'season'
+            def _search_action():
+                return self.api.get_release_by_season(series_id, season_num)
         elif node_type == 'series':
-            # collect from all seasons -> all episodes
-            for s_row in range(item.rowCount()):
-                season_item = item.child(s_row, 0)
-                for ep_row in range(season_item.rowCount()):
-                    ep_item = season_item.child(ep_row, 0)
-                    ep_data_list = ep_item.data(ROLE_EPISODE_DATA) or []
-                    ep_ids.extend(ep['id'] for ep in ep_data_list if 'id' in ep)
-
-        if not ep_ids:
-            QMessageBox.warning(self, 'No Episodes', 'No episode IDs found for manual search.')
-            return
-
-        # search using the first episode id (Sonarr release endpoint is per-episode)
-        self.status_label.setText('Searching for releases…')
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-        try:
-            releases = self.api.get_release(ep_ids[0])
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, 'Error', f'Manual search failed:\n{e}')
-            self.status_label.setText('Search failed')
-            return
-        QApplication.restoreOverrideCursor()
-
-        if not releases:
-            QMessageBox.information(self, 'No Results', 'No releases found.')
-            self.status_label.setText('No releases found')
-            return
-
-        dlg = ManualSearchDialog(self, item.text(), releases, settings=self._settings)
-        if dlg.exec() == QDialog.Accepted and dlg.selected_release:
-            rel = dlg.selected_release
-            try:
-                self.api.download_release(rel['guid'], rel['indexerId'])
-                self.status_label.setText(f'Download queued: {rel.get("title", "?")}')
-            except Exception as e:
-                QMessageBox.critical(self, 'Error', f'Failed to queue download:\n{e}')
+            if series_id is None:
+                QMessageBox.warning(self, 'No Series', 'No series ID found for manual search.')
+                return
+            query_label = 'series'
+            def _search_action():
+                return self.api.get_release_by_series(series_id)
         else:
-            self.status_label.setText('Manual search cancelled')
-
+            return
+        def _on_search_success(releases: List[dict]):
+            if not releases:
+                QMessageBox.information(self, 'No Results', 'No releases found.')
+                self.status_label.setText('No releases found')
+                return
+            dlg = ManualSearchDialog(self, label, releases, settings=self._settings)
+            if dlg.exec() != QDialog.Accepted or not dlg.selected_release:
+                self.status_label.setText('Manual search cancelled')
+                return
+            rel = dlg.selected_release
+            def _download_action():
+                self.api.download_release(rel['guid'], rel['indexerId'])
+                return None
+            def _on_download_success(_result):
+                self.status_label.setText(f'Download queued: {rel.get("title", "?")}')
+            self._run_api_action(
+                'Queueing selected release...',
+                _download_action,
+                _on_download_success,
+                'Failed to queue download',
+            )
+        self._run_api_action(
+            f'Searching releases for {query_label}: {label}...',
+            _search_action,
+            _on_search_success,
+            'Manual search failed',
+        )
     def _ctx_delete_from_disk(self, item: QStandardItem, node_type: str):
         label = item.text()
         reply = QMessageBox.question(
@@ -1733,134 +1958,164 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
-
-        try:
-            api_failures = 0
-            if node_type == 'series':
-                series_path = item.data(ROLE_SERIES_PATH)
-                # delete episode files from Sonarr DB
-                for s_row in range(item.rowCount()):
-                    season_item = item.child(s_row, 0)
-                    for ep_row in range(season_item.rowCount()):
-                        ep_item = season_item.child(ep_row, 0)
-                        file_id = ep_item.data(ROLE_FILE_ID)
-                        if file_id:
-                            try:
-                                self.api.delete_episode_file(file_id)
-                            except Exception:
-                                api_failures += 1
-                if series_path and os.path.isdir(series_path):
-                    shutil.rmtree(series_path, ignore_errors=True)
-                parent = item.parent() or self.model.invisibleRootItem()
-                parent.removeRow(item.row())
-                msg = f'Deleted from disk: {label}'
-                if api_failures:
-                    msg += f' ({api_failures} API delete errors)'
-                self.status_label.setText(msg)
-
-            elif node_type == 'season':
-                season_path = item.data(ROLE_SEASON_PATH)
-                for row in range(item.rowCount()):
-                    ep_item = item.child(row, 0)
+        if node_type == 'series':
+            series_path = item.data(ROLE_SERIES_PATH)
+            file_ids: List[int] = []
+            for s_row in range(item.rowCount()):
+                season_item = item.child(s_row, 0)
+                for ep_row in range(season_item.rowCount()):
+                    ep_item = season_item.child(ep_row, 0)
                     file_id = ep_item.data(ROLE_FILE_ID)
                     if file_id:
-                        try:
-                            self.api.delete_episode_file(file_id)
-                        except Exception:
-                            api_failures += 1
-                if season_path and os.path.isdir(season_path):
-                    shutil.rmtree(season_path, ignore_errors=True)
-                parent = item.parent() or self.model.invisibleRootItem()
-                parent.removeRow(item.row())
+                        file_ids.append(file_id)
+            def _action():
+                api_failures = 0
+                for file_id in file_ids:
+                    try:
+                        self.api.delete_episode_file(file_id)
+                    except Exception:
+                        api_failures += 1
+                fs_deleted, fs_error = self._delete_tree_path(series_path)
+                return {'api_failures': api_failures, 'fs_deleted': fs_deleted, 'fs_error': fs_error}
+            def _on_success(result):
                 msg = f'Deleted from disk: {label}'
-                if api_failures:
-                    msg += f' ({api_failures} API delete errors)'
+                if result['api_failures']:
+                    msg += f" ({result['api_failures']} API delete errors)"
+                if not result['fs_deleted']:
+                    msg += ' (disk delete failed)'
+                    if result['fs_error']:
+                        QMessageBox.warning(self, 'Delete Warning', f'Disk delete failed:\n{result["fs_error"]}')
+                else:
+                    parent = item.parent() or self.model.invisibleRootItem()
+                    parent.removeRow(item.row())
                 self.status_label.setText(msg)
-
-            elif node_type == 'episode':
-                file_id = item.data(ROLE_FILE_ID)
-                file_path = item.data(ROLE_FILE_PATH)
+            self._run_api_action(f'Deleting from disk: {label}...', _action, _on_success, 'Delete from disk failed')
+            return
+        if node_type == 'season':
+            season_path = item.data(ROLE_SEASON_PATH)
+            file_ids = []
+            for row in range(item.rowCount()):
+                ep_item = item.child(row, 0)
+                file_id = ep_item.data(ROLE_FILE_ID)
+                if file_id:
+                    file_ids.append(file_id)
+            def _action():
+                api_failures = 0
+                for file_id in file_ids:
+                    try:
+                        self.api.delete_episode_file(file_id)
+                    except Exception:
+                        api_failures += 1
+                fs_deleted, fs_error = self._delete_tree_path(season_path)
+                return {'api_failures': api_failures, 'fs_deleted': fs_deleted, 'fs_error': fs_error}
+            def _on_success(result):
+                msg = f'Deleted from disk: {label}'
+                if result['api_failures']:
+                    msg += f" ({result['api_failures']} API delete errors)"
+                if not result['fs_deleted']:
+                    msg += ' (disk delete failed)'
+                    if result['fs_error']:
+                        QMessageBox.warning(self, 'Delete Warning', f'Disk delete failed:\n{result["fs_error"]}')
+                else:
+                    parent = item.parent() or self.model.invisibleRootItem()
+                    parent.removeRow(item.row())
+                self.status_label.setText(msg)
+            self._run_api_action(f'Deleting from disk: {label}...', _action, _on_success, 'Delete from disk failed')
+            return
+        if node_type == 'episode':
+            file_id = item.data(ROLE_FILE_ID)
+            file_path = item.data(ROLE_FILE_PATH)
+            if not file_id and not file_path:
+                self.status_label.setText('No file found for this episode')
+                return
+            def _action():
+                api_failures = 0
                 if file_id:
                     try:
                         self.api.delete_episode_file(file_id)
                     except Exception:
                         api_failures += 1
-                if file_path and os.path.isfile(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
-                parent = item.parent() or self.model.invisibleRootItem()
-                parent.removeRow(item.row())
+                fs_deleted, fs_error = self._delete_file_path(file_path)
+                return {'api_failures': api_failures, 'fs_deleted': fs_deleted, 'fs_error': fs_error}
+            def _on_success(result):
                 msg = f'Deleted from disk: {label}'
-                if api_failures:
-                    msg += f' ({api_failures} API delete errors)'
+                if result['api_failures']:
+                    msg += f" ({result['api_failures']} API delete errors)"
+                if not result['fs_deleted']:
+                    msg += ' (disk delete failed)'
+                    if result['fs_error']:
+                        QMessageBox.warning(self, 'Delete Warning', f'Disk delete failed:\n{result["fs_error"]}')
+                else:
+                    parent = item.parent() or self.model.invisibleRootItem()
+                    parent.removeRow(item.row())
                 self.status_label.setText(msg)
-
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed:\n{e}')
-
+            self._run_api_action(f'Deleting from disk: {label}...', _action, _on_success, 'Delete from disk failed')
     def _ctx_change_quality_profile(self, item: QStandardItem):
         """Change quality profile for a series via a combo-box dialog."""
         node_type = item.data(ROLE_NODE_TYPE)
         if node_type != 'series':
             self.status_label.setText('Quality profile can only be changed on a series')
             return
-
         series_id = item.data(ROLE_SERIES_ID)
         if not self._quality_profiles:
             QMessageBox.critical(self, 'Error', 'No quality profiles available.')
             return
-
-        try:
-            series_data = self.api.get_series_by_id(series_id)
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to fetch series:\n{e}')
-            return
-
-        current_qp_id = series_data.get('qualityProfileId', 0)
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle('Change Quality Profile')
-        lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel(f'Quality profile for: {item.text()}'))
-        combo = QComboBox()
-        current_idx = 0
-        for i, p in enumerate(self._quality_profiles):
-            combo.addItem(p['name'], p['id'])
-            if p['id'] == current_qp_id:
-                current_idx = i
-        combo.setCurrentIndex(current_idx)
-        lay.addWidget(combo)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        lay.addWidget(btns)
-
-        if dlg.exec() != QDialog.Accepted:
-            return
-
-        new_qp_id = combo.currentData()
-        if new_qp_id == current_qp_id:
-            return
-
-        try:
-            series_data['qualityProfileId'] = new_qp_id
-            self.api.update_series(series_data)
-            # update the tree cell
-            row_idx = item.index().row()
-            parent = item.parent() or self.model.invisibleRootItem()
-            qp_item = parent.child(row_idx, 3)
-            if qp_item:
-                qp_item.setText(combo.currentText())
-            self.status_label.setText(f'Quality profile changed to {combo.currentText()} for {item.text()}')
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to update quality profile:\n{e}')
-
+        label = item.text()
+        def _fetch_action():
+            return self.api.get_series_by_id(series_id)
+        def _on_fetched(series_data: dict):
+            current_qp_id = series_data.get('qualityProfileId', 0)
+            dlg = QDialog(self)
+            dlg.setWindowTitle('Change Quality Profile')
+            lay = QVBoxLayout(dlg)
+            lay.addWidget(QLabel(f'Quality profile for: {label}'))
+            combo = QComboBox()
+            current_idx = 0
+            for i, p in enumerate(self._quality_profiles):
+                combo.addItem(p['name'], p['id'])
+                if p['id'] == current_qp_id:
+                    current_idx = i
+            combo.setCurrentIndex(current_idx)
+            lay.addWidget(combo)
+            btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            btns.accepted.connect(dlg.accept)
+            btns.rejected.connect(dlg.reject)
+            lay.addWidget(btns)
+            if dlg.exec() != QDialog.Accepted:
+                self.status_label.setText('Quality profile change cancelled')
+                return
+            new_qp_id = combo.currentData()
+            if new_qp_id == current_qp_id:
+                self.status_label.setText('Quality profile unchanged')
+                return
+            selected_name = combo.currentText()
+            def _update_action():
+                payload = dict(series_data)
+                payload['qualityProfileId'] = new_qp_id
+                self.api.update_series(payload)
+                return None
+            def _on_updated(_result):
+                row_idx = item.index().row()
+                parent = item.parent() or self.model.invisibleRootItem()
+                qp_item = parent.child(row_idx, 3)
+                if qp_item:
+                    qp_item.setText(selected_name)
+                self.status_label.setText(f'Quality profile changed to {selected_name} for {label}')
+            self._run_api_action(
+                f'Updating quality profile: {label}...',
+                _update_action,
+                _on_updated,
+                'Failed to update quality profile',
+            )
+        self._run_api_action(
+            f'Loading quality profile options: {label}...',
+            _fetch_action,
+            _on_fetched,
+            'Failed to fetch series',
+        )
     def _ctx_unmonitor_delete(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
         label = item.text()
-
         reply = QMessageBox.question(
             self, 'Unmonitor & Delete',
             f'Unmonitor "{label}" and delete files from disk?\n\nThis cannot be undone.',
@@ -1868,36 +2123,39 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
-
-        try:
-            api_failures = 0
-            if node_type == 'series':
+        if node_type == 'series':
+            def _action():
                 self.api.delete_series(series_id, delete_files=True)
+                return {'api_failures': 0}
+            def _on_success(_result):
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
-                msg = f'Deleted & unmonitored: {label}'
-                if api_failures:
-                    msg += f' ({api_failures} API errors)'
-                self.status_label.setText(msg)
-
-            elif node_type == 'season':
-                season_num = item.data(ROLE_SEASON_NUM)
-                season_path = item.data(ROLE_SEASON_PATH)
-
-                # delete episode files from Sonarr
-                for row in range(item.rowCount()):
-                    ep_item = item.child(row, 0)
-                    file_id = ep_item.data(ROLE_FILE_ID)
-                    if file_id:
-                        try:
-                            self.api.delete_episode_file(file_id)
-                        except Exception:
-                            api_failures += 1
-
-                # unmonitor episodes
-                api_failures += self._unmonitor_season_episodes(item)
-
-                # unmonitor the season
+                self.status_label.setText(f'Deleted & unmonitored: {label}')
+            self._run_api_action(f'Deleting & unmonitoring: {label}...', _action, _on_success, 'Unmonitor & delete failed')
+            return
+        if node_type == 'season':
+            season_num = item.data(ROLE_SEASON_NUM)
+            season_path = item.data(ROLE_SEASON_PATH)
+            file_ids: List[int] = []
+            for row in range(item.rowCount()):
+                ep_item = item.child(row, 0)
+                file_id = ep_item.data(ROLE_FILE_ID)
+                if file_id:
+                    file_ids.append(file_id)
+            season_episodes = self._collect_episode_payloads(item)
+            def _action():
+                api_failures = 0
+                for file_id in file_ids:
+                    try:
+                        self.api.delete_episode_file(file_id)
+                    except Exception:
+                        api_failures += 1
+                for ep in season_episodes:
+                    ep['monitored'] = False
+                    try:
+                        self.api.update_episode(ep)
+                    except Exception:
+                        api_failures += 1
                 try:
                     series_data = self.api.get_series_by_id(series_id)
                     for s in series_data.get('seasons', []):
@@ -1907,51 +2165,59 @@ class MainWindow(QMainWindow):
                     self.api.update_series(series_data)
                 except Exception:
                     api_failures += 1
-
-                # delete season directory
-                if season_path and os.path.isdir(season_path):
-                    shutil.rmtree(season_path, ignore_errors=True)
-
-                parent = item.parent() or self.model.invisibleRootItem()
-                parent.removeRow(item.row())
+                fs_deleted, fs_error = self._delete_tree_path(season_path)
+                return {'api_failures': api_failures, 'fs_deleted': fs_deleted, 'fs_error': fs_error}
+            def _on_success(result):
                 msg = f'Deleted & unmonitored: {label}'
-                if api_failures:
-                    msg += f' ({api_failures} API errors)'
+                if result['api_failures']:
+                    msg += f" ({result['api_failures']} API errors)"
+                if not result['fs_deleted']:
+                    msg += ' (disk delete failed)'
+                    if result['fs_error']:
+                        QMessageBox.warning(self, 'Delete Warning', f'Disk delete failed:\n{result["fs_error"]}')
+                    self._update_mon_column(item, False)
+                    for row in range(item.rowCount()):
+                        ep_item = item.child(row, 0)
+                        self._update_mon_column(ep_item, False)
+                else:
+                    parent = item.parent() or self.model.invisibleRootItem()
+                    parent.removeRow(item.row())
                 self.status_label.setText(msg)
-
-            elif node_type == 'episode':
-                file_id = item.data(ROLE_FILE_ID)
-                file_path = item.data(ROLE_FILE_PATH)
-                # unmonitor
-                ep_data_list = item.data(ROLE_EPISODE_DATA) or []
-                for ep in ep_data_list:
+            self._run_api_action(f'Deleting & unmonitoring: {label}...', _action, _on_success, 'Unmonitor & delete failed')
+            return
+        if node_type == 'episode':
+            file_id = item.data(ROLE_FILE_ID)
+            file_path = item.data(ROLE_FILE_PATH)
+            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            def _action():
+                api_failures = 0
+                for ep in ep_payloads:
                     ep['monitored'] = False
                     try:
                         self.api.update_episode(ep)
                     except Exception:
                         api_failures += 1
-                # delete file from Sonarr
                 if file_id:
                     try:
                         self.api.delete_episode_file(file_id)
                     except Exception:
                         api_failures += 1
-                # delete from disk
-                if file_path and os.path.isfile(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
-                parent = item.parent() or self.model.invisibleRootItem()
-                parent.removeRow(item.row())
+                fs_deleted, fs_error = self._delete_file_path(file_path)
+                return {'api_failures': api_failures, 'fs_deleted': fs_deleted, 'fs_error': fs_error}
+            def _on_success(result):
                 msg = f'Deleted & unmonitored: {label}'
-                if api_failures:
-                    msg += f' ({api_failures} API errors)'
+                if result['api_failures']:
+                    msg += f" ({result['api_failures']} API errors)"
+                if not result['fs_deleted']:
+                    msg += ' (disk delete failed)'
+                    if result['fs_error']:
+                        QMessageBox.warning(self, 'Delete Warning', f'Disk delete failed:\n{result["fs_error"]}')
+                    self._update_mon_column(item, False)
+                else:
+                    parent = item.parent() or self.model.invisibleRootItem()
+                    parent.removeRow(item.row())
                 self.status_label.setText(msg)
-
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed:\n{e}')
-
+            self._run_api_action(f'Deleting & unmonitoring: {label}...', _action, _on_success, 'Unmonitor & delete failed')
     # ── keyboard / double-click actions ────────────────────────
 
     def _current_item(self) -> Optional[QStandardItem]:
@@ -1996,6 +2262,8 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(f'File not found: {path}')
 
     def _on_delete(self):
+        if not self._ensure_action_idle():
+            return
         item = self._current_item()
         if not item:
             return
@@ -2015,13 +2283,17 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
-        try:
+
+        def _action():
             self.api.delete_series(series_id, delete_files=True)
+            return None
+
+        def _on_success(_result):
             parent = item.parent() or self.model.invisibleRootItem()
             parent.removeRow(item.row())
             self.status_label.setText(f'Deleted series: {title}')
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to delete series:\n{e}')
+
+        self._run_api_action(f'Deleting series: {title}...', _action, _on_success, 'Failed to delete series')
 
     def _delete_season(self, item: QStandardItem):
         # reuse the unmonitor & delete logic
@@ -2030,6 +2302,8 @@ class MainWindow(QMainWindow):
     # ── Add Show ───────────────────────────────────────────────
 
     def _add_show(self):
+        if not self._ensure_action_idle():
+            return
         dlg = AddShowDialog(self, self.api)
         if dlg.exec() == QDialog.Accepted and dlg.added_series:
             self._refresh()
@@ -2039,6 +2313,14 @@ class MainWindow(QMainWindow):
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
         self._settings.setValue('column_widths', widths)
         self._settings.sync()
+        if not self._stop_action_worker(5000):
+            QMessageBox.warning(
+                self,
+                'Action still running',
+                'An action is still in progress.\nPlease try closing again in a few seconds.',
+            )
+            event.ignore()
+            return
         if not self._stop_worker(5000):
             reply = QMessageBox.question(
                 self,
@@ -2065,10 +2347,13 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
             self.worker = None
+        self.action_worker = None
         super().closeEvent(event)
 
     def _clear_cache_and_refresh(self):
         """Clear the ffprobe cache and reload all data."""
+        if not self._ensure_action_idle('Action still running; try again in a moment'):
+            return
         if not self._stop_worker(5000):
             QMessageBox.warning(
                 self,
@@ -2087,6 +2372,8 @@ class MainWindow(QMainWindow):
 
     def _refresh(self):
         """Reload all data from Sonarr."""
+        if not self._ensure_action_idle('Action still running; try again'):
+            return
         if not self._stop_worker(5000):
             QMessageBox.warning(
                 self,

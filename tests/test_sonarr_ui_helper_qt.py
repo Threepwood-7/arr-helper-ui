@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QStandardItem
 from PySide6.QtWidgets import QMessageBox
 
 import sonarr_ui_helper as sui
@@ -117,3 +117,118 @@ def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
 
     assert ini_path.exists()
     assert opened == [str(ini_path)]
+
+
+class _ManualSearchAPI(_MinimalAPI):
+    def __init__(self):
+        self.calls = []
+
+    def get_release(self, episode_id):
+        self.calls.append(("episode", episode_id))
+        return []
+
+    def get_release_by_series(self, series_id):
+        self.calls.append(("series", series_id))
+        return []
+
+    def get_release_by_season(self, series_id, season_number):
+        self.calls.append(("season", series_id, season_number))
+        return []
+
+
+def test_manual_search_season_queries_series_season_endpoint(qtbot, monkeypatch):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    api = _ManualSearchAPI()
+    win = sui.MainWindow(api, settings={})
+    qtbot.addWidget(win)
+
+    monkeypatch.setattr(
+        win,
+        "_run_api_action",
+        lambda _start, action, on_success, _err: (on_success(action()), True)[1],
+    )
+
+    item = QStandardItem("Season 1")
+    item.setData("season", sui.ROLE_NODE_TYPE)
+    item.setData(77, sui.ROLE_SERIES_ID)
+    item.setData(1, sui.ROLE_SEASON_NUM)
+    win._ctx_manual_search(item, "season")
+
+    assert api.calls == [("season", 77, 1)]
+
+
+def test_manual_search_series_queries_series_endpoint(qtbot, monkeypatch):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    api = _ManualSearchAPI()
+    win = sui.MainWindow(api, settings={})
+    qtbot.addWidget(win)
+
+    monkeypatch.setattr(
+        win,
+        "_run_api_action",
+        lambda _start, action, on_success, _err: (on_success(action()), True)[1],
+    )
+
+    item = QStandardItem("My Series")
+    item.setData("series", sui.ROLE_NODE_TYPE)
+    item.setData(88, sui.ROLE_SERIES_ID)
+    win._ctx_manual_search(item, "series")
+
+    assert api.calls == [("series", 88)]
+
+
+class _DeleteAPI(_MinimalAPI):
+    def __init__(self):
+        self.deleted_file_ids = []
+
+    def delete_episode_file(self, file_id):
+        self.deleted_file_ids.append(file_id)
+
+
+def test_delete_from_disk_episode_keeps_row_when_file_delete_fails(qtbot, monkeypatch, tmp_path):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    api = _DeleteAPI()
+    win = sui.MainWindow(api, settings={})
+    qtbot.addWidget(win)
+
+    monkeypatch.setattr(
+        win,
+        "_run_api_action",
+        lambda _start, action, on_success, _err: (on_success(action()), True)[1],
+    )
+
+    file_path = tmp_path / "locked.mkv"
+    file_path.write_bytes(b"x")
+
+    series_item = QStandardItem("Series")
+    series_item.setData("series", sui.ROLE_NODE_TYPE)
+    season_item = QStandardItem("Season 1")
+    season_item.setData("season", sui.ROLE_NODE_TYPE)
+    ep_item = QStandardItem("E01")
+    ep_item.setData("episode", sui.ROLE_NODE_TYPE)
+    ep_item.setData(123, sui.ROLE_FILE_ID)
+    ep_item.setData(str(file_path), sui.ROLE_FILE_PATH)
+
+    def _make_row(item):
+        row = [QStandardItem("") for _ in range(len(win._columns))]
+        row[0] = item
+        return row
+
+    season_item.appendRow(_make_row(ep_item))
+    series_item.appendRow(_make_row(season_item))
+    win.model.appendRow(_make_row(series_item))
+
+    def _fail_remove(_path):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(sui.os, "remove", _fail_remove)
+
+    win._ctx_delete_from_disk(ep_item, "episode")
+
+    assert season_item.rowCount() == 1
+    assert api.deleted_file_ids == [123]
+    assert "disk delete failed" in win.status_label.text().lower()
