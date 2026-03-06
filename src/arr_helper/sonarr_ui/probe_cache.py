@@ -3,25 +3,18 @@
 import json
 import os
 import subprocess
-import tempfile
 import threading
 import time
 from typing import Any
 
 from ..core.ffprobe import ffprobe_subprocess_kwargs
+from ..core.paths import get_app_cache_dir
 
 _FFPROBE: str | None = None          # resolved at startup in main()
-SETTINGS_ORG_NAME = 'SonarrUIHelper'
-SETTINGS_APP_NAME = 'SonarrUIHelper'
 
 
 def _get_app_cache_dir() -> str:
-    cache_dir = os.path.join(tempfile.gettempdir(), 'temp_arr_helper_ui')
-    try:
-        os.makedirs(cache_dir, exist_ok=True)
-        return cache_dir
-    except OSError:
-        return os.path.dirname(os.path.abspath(__file__))
+    return get_app_cache_dir(os.path.dirname(os.path.abspath(__file__)))
 
 
 _PROBE_CACHE_PATH = os.path.join(_get_app_cache_dir(), 'z_fprobe.cache')

@@ -1,12 +1,13 @@
 """Shared path helpers."""
 
 import os
-import tempfile
+
+from ..runtime_paths import resolve_app_data_dir
 
 
 def get_app_cache_dir(fallback_dir: str) -> str:
     """Return the app cache directory, falling back if creation fails."""
-    cache_dir = os.path.join(tempfile.gettempdir(), 'temp_arr_helper_ui')
+    cache_dir = str(resolve_app_data_dir() / "cache")
     try:
         os.makedirs(cache_dir, exist_ok=True)
         return cache_dir

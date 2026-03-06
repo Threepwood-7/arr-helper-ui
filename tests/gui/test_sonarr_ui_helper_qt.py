@@ -119,6 +119,23 @@ def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
     assert opened == [str(ini_path)]
 
 
+def test_reset_view_only_clears_ui_namespace(qtbot, monkeypatch):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+
+    win = sui.MainWindow(_MinimalAPI(), settings={})
+    qtbot.addWidget(win)
+
+    win._settings.setValue("config/sonarr/url", "http://example")
+    win._settings.setValue(win._ui_key("column_widths"), [80] * len(win._columns))
+    win._settings.sync()
+
+    win._reset_view_settings()
+
+    assert win._settings.contains("config/sonarr/url")
+    assert not win._settings.contains(win._ui_key("column_widths"))
+
+
 class _ManualSearchAPI(_MinimalAPI):
     def __init__(self):
         self.calls = []

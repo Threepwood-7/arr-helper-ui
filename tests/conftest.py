@@ -19,6 +19,19 @@ class _FixtureAPI:
         return []
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runtime_dirs(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+
+    from arr_helper.runtime_paths import configure_qsettings
+
+    configure_qsettings(str(config_dir))
+    yield
+
+
 @pytest.fixture
 def window(qtbot, monkeypatch):
     from arr_helper.sonarr_ui.main_window import MainWindow

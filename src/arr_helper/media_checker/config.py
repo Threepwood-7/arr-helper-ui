@@ -23,10 +23,13 @@ from ..core.locking import (
     write_json_atomic_locked as _core_write_json_atomic_locked,
 )
 from ..core.paths import get_app_cache_dir
+from ..runtime_paths import (
+    SETTINGS_APP_NAME,
+    SETTINGS_ORG_NAME,
+    configure_qsettings,
+)
 
-APP_SLUG = "arr-helper-ui"
-SETTINGS_ORG_NAME = "ArrHelperUI"
-SETTINGS_APP_NAME = "ArrHelperConfig"
+APP_SLUG = "arr_helper"
 
 SECRET_ENV_TO_KEYS = (
     ("ARR_HELPER_SONARR_API_KEY", ("sonarr", "api_key")),
@@ -76,51 +79,51 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 # (path, value_type, default)
 CONFIG_SCHEMA: tuple[tuple[str, type, Any], ...] = (
-    ("sonarr/url", str, DEFAULT_CONFIG["sonarr"]["url"]),
-    ("sonarr/api_key", str, DEFAULT_CONFIG["sonarr"]["api_key"]),
-    ("sonarr/enabled", bool, DEFAULT_CONFIG["sonarr"]["enabled"]),
+    ("config/sonarr/url", str, DEFAULT_CONFIG["sonarr"]["url"]),
+    ("config/sonarr/api_key", str, DEFAULT_CONFIG["sonarr"]["api_key"]),
+    ("config/sonarr/enabled", bool, DEFAULT_CONFIG["sonarr"]["enabled"]),
     (
-        "sonarr/http_basic_auth_username",
+        "config/sonarr/http_basic_auth_username",
         str,
         DEFAULT_CONFIG["sonarr"]["http_basic_auth_username"],
     ),
     (
-        "sonarr/http_basic_auth_password",
+        "config/sonarr/http_basic_auth_password",
         str,
         DEFAULT_CONFIG["sonarr"]["http_basic_auth_password"],
     ),
-    ("radarr/url", str, DEFAULT_CONFIG["radarr"]["url"]),
-    ("radarr/api_key", str, DEFAULT_CONFIG["radarr"]["api_key"]),
-    ("radarr/enabled", bool, DEFAULT_CONFIG["radarr"]["enabled"]),
+    ("config/radarr/url", str, DEFAULT_CONFIG["radarr"]["url"]),
+    ("config/radarr/api_key", str, DEFAULT_CONFIG["radarr"]["api_key"]),
+    ("config/radarr/enabled", bool, DEFAULT_CONFIG["radarr"]["enabled"]),
     (
-        "radarr/http_basic_auth_username",
+        "config/radarr/http_basic_auth_username",
         str,
         DEFAULT_CONFIG["radarr"]["http_basic_auth_username"],
     ),
     (
-        "radarr/http_basic_auth_password",
+        "config/radarr/http_basic_auth_password",
         str,
         DEFAULT_CONFIG["radarr"]["http_basic_auth_password"],
     ),
-    ("settings/dry_run", bool, DEFAULT_CONFIG["settings"]["dry_run"]),
-    ("settings/interactive", bool, DEFAULT_CONFIG["settings"]["interactive"]),
+    ("config/settings/dry_run", bool, DEFAULT_CONFIG["settings"]["dry_run"]),
+    ("config/settings/interactive", bool, DEFAULT_CONFIG["settings"]["interactive"]),
     (
-        "settings/require_english_audio",
+        "config/settings/require_english_audio",
         bool,
         DEFAULT_CONFIG["settings"]["require_english_audio"],
     ),
     (
-        "settings/require_english_subs",
+        "config/settings/require_english_subs",
         bool,
         DEFAULT_CONFIG["settings"]["require_english_subs"],
     ),
     (
-        "settings/english_language_codes",
+        "config/settings/english_language_codes",
         list,
         DEFAULT_CONFIG["settings"]["english_language_codes"],
     ),
     (
-        "settings/highlight_missing_subs",
+        "config/settings/highlight_missing_subs",
         str,
         DEFAULT_CONFIG["settings"]["highlight_missing_subs"],
     ),
@@ -165,7 +168,15 @@ def _set_nested_value(target: dict[str, Any], key_path: tuple[str, ...], value: 
     current[key_path[-1]] = value
 
 
+def _schema_config_path(schema_key: str) -> tuple[str, ...]:
+    parts = tuple(schema_key.split("/"))
+    if parts and parts[0] == "config":
+        return parts[1:]
+    return parts
+
+
 def _new_config_settings() -> QSettings:
+    configure_qsettings()
     return QSettings(
         QSettings.Format.IniFormat,
         QSettings.Scope.UserScope,
@@ -224,7 +235,7 @@ def _settings_file_path(settings: QSettings) -> str:
     file_name = str(settings.fileName() or "").strip()
     if file_name:
         return file_name
-    return str(Path.cwd() / "arr_helper_config.ini")
+    return str(Path.cwd() / f"{SETTINGS_APP_NAME}.ini")
 
 
 class Config:
@@ -244,7 +255,7 @@ class Config:
         for key, value_type, default in CONFIG_SCHEMA:
             raw = self._settings.value(key, default)
             value = _coerce_value(raw, value_type, default)
-            _set_nested_value(merged, tuple(key.split("/")), value)
+            _set_nested_value(merged, _schema_config_path(key), value)
         self._apply_secret_env_overrides(merged)
         return merged
 
@@ -262,7 +273,7 @@ class Config:
         if new_config is not None:
             self.config = _deep_merge_dicts(copy.deepcopy(DEFAULT_CONFIG), new_config)
         for key, value_type, default in CONFIG_SCHEMA:
-            path = tuple(key.split("/"))
+            path = _schema_config_path(key)
             current: Any = self.config
             for part in path:
                 if not isinstance(current, dict):

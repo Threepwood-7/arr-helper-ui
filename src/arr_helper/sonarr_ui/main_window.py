@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..runtime_paths import SETTINGS_APP_NAME, SETTINGS_ORG_NAME, configure_qsettings
 from .api import SonarrAPI
 from .dialogs.add_show import AddShowDialog
 from .dialogs.manual_search import ManualSearchDialog
@@ -53,13 +54,10 @@ from .roles import (
 )
 from .workers import ApiActionWorker, LoadWorker
 
-SETTINGS_ORG_NAME = 'SonarrUIHelper'
-SETTINGS_APP_NAME = 'SonarrUIHelper'
-
-
 class MainWindow(QMainWindow):
     def __init__(self, api: SonarrAPI, loader_api: SonarrAPI | None = None, settings: dict = None):
         super().__init__()
+        configure_qsettings()
         self.api = api
         self.loader_api = loader_api or api
         self.cfg = settings or {}
@@ -160,6 +158,10 @@ class MainWindow(QMainWindow):
         self._start_worker()
 
     # ── menu bar ───────────────────────────────────────────────
+
+    @staticmethod
+    def _ui_key(name: str) -> str:
+        return f'ui/sonarr_ui/{name}'
 
     def _build_menu_bar(self):
         mb = self.menuBar()
@@ -264,7 +266,9 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        self._settings.clear()
+        self._settings.beginGroup('ui/sonarr_ui')
+        self._settings.remove('')
+        self._settings.endGroup()
         self._settings.sync()
 
         # Re-apply in-memory defaults immediately.
@@ -635,7 +639,7 @@ class MainWindow(QMainWindow):
         # resize columns
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        saved = self._settings.value('column_widths')
+        saved = self._settings.value(self._ui_key('column_widths'))
         if saved and len(saved) == len(self._columns):
             for col, w in enumerate(saved):
                 self.tree.setColumnWidth(col, int(w))
@@ -1409,7 +1413,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Save column widths and stop worker before closing."""
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
-        self._settings.setValue('column_widths', widths)
+        self._settings.setValue(self._ui_key('column_widths'), widths)
         self._settings.sync()
         if not self._stop_action_worker(5000):
             QMessageBox.warning(

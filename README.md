@@ -214,13 +214,20 @@ schtasks /create /tn "MediaChecker" /tr "python -m arr_helper.media_checker.app"
 
 Both tools use a typed QSettings runtime config store.
 
-- Config store backend: QSettings `IniFormat`, user scope
-- Config store id: org `ArrHelperUI`, app `ArrHelperConfig`
+- Config store backend: `QSettings(IniFormat, UserScope, "ThreepSoftwz", "arr_helper")`
+- Default INI path: `%APPDATA%\ThreepSoftwz\arr_helper.ini`
+- Default non-INI data path: `%LOCALAPPDATA%\ThreepSoftwz\arr_helper\`
+- OV01 env overrides:
+  - `CONFIG_DIR` overrides the QSettings INI root
+  - `DATA_DIR` overrides the runtime data root (cache files, probe cache, etc.)
 - Secrets are persisted in the same store (plaintext), with env overrides when present:
   - `ARR_HELPER_SONARR_API_KEY`
   - `ARR_HELPER_RADARR_API_KEY`
   - `ARR_HELPER_SONARR_HTTP_BASIC_AUTH_PASSWORD`
   - `ARR_HELPER_RADARR_HTTP_BASIC_AUTH_PASSWORD`
+- Namespaces:
+  - `config/...` service and checker settings
+  - `ui/sonarr_ui/...` Sonarr UI state (column widths, dialog state, etc.)
 
 1. Launch `python -m arr_helper` to open the setup wizard
 2. Fill Sonarr/Radarr URLs and API keys
@@ -229,34 +236,18 @@ Both tools use a typed QSettings runtime config store.
 Example:
 
 ```ini
-[sonarr]
-url=http://localhost:8989
-api_key=your-sonarr-api-key
-enabled=true
-# http_basic_auth_password = ""
-
-[radarr]
-url = "http://localhost:7878"
-api_key = "your-radarr-api-key-here"
-enabled = true
-# http_basic_auth_username = ""
-# http_basic_auth_password = ""
-
-[settings]
-# safety switch for arr_helper.media_checker.app
-dry_run = false
-
-# interactive release selection mode in arr_helper.media_checker.app
-interactive = true
-
-# language requirements for arr_helper.media_checker.app
-require_english_audio = true
-require_english_subs = true
-english_language_codes = ["eng", "en", "english"]
-
-# Highlight episodes missing subtitles (light red background in UI).
-# The value is a label; matching is done against english_language_codes.
-# highlight_missing_subs = "english"
+config/sonarr/url=http://localhost:8989
+config/sonarr/api_key=your-sonarr-api-key
+config/sonarr/enabled=true
+config/radarr/url=http://localhost:7878
+config/radarr/api_key=your-radarr-api-key
+config/radarr/enabled=true
+config/settings/dry_run=false
+config/settings/interactive=true
+config/settings/require_english_audio=true
+config/settings/require_english_subs=true
+config/settings/english_language_codes=eng,en,english
+config/settings/highlight_missing_subs=
 ```
 
 ### Finding API Keys
@@ -277,10 +268,8 @@ http_basic_auth_password=mypass
 
 ### Cache Files
 
-Cache/state files are stored under the system temp directory in `temp_arr_helper_ui`.
-If that directory cannot be created, the tools fall back to their local runtime directory.
-
-- Windows: `%TEMP%\temp_arr_helper_ui\`
+Cache/state files are stored under `%LOCALAPPDATA%\ThreepSoftwz\arr_helper\cache\` by default
+(or `DATA_DIR\arr_helper\cache\` when overridden).
 
 Files:
 - `z_fprobe.cache` - ffprobe metadata cache used by `arr_helper.sonarr_ui.app`
