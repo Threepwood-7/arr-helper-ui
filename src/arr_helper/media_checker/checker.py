@@ -417,6 +417,40 @@ class MediaQualityChecker:
             self.console.print(f"[red]Error downloading release: {e}[/red]")
             return False
 
+    def _delete_file_and_trigger_search(
+        self,
+        *,
+        url: str,
+        api_key: str,
+        file_endpoint: str,
+        auth: tuple[str, str] | None,
+        search_payload: dict | None,
+        trigger_message: str,
+        missing_search_message: str | None = None,
+    ) -> None:
+        """Delete a media file and optionally trigger an arr search command."""
+        print("     Deleting file to trigger re-download...")
+        self._make_request(
+            url,
+            api_key,
+            file_endpoint,
+            method='DELETE',
+            auth=auth,
+        )
+        if search_payload:
+            print(f"     {trigger_message}")
+            self._make_request(
+                url,
+                api_key,
+                'command',
+                method='POST',
+                data=search_payload,
+                auth=auth,
+            )
+            return
+        if missing_search_message:
+            print(f"     {missing_search_message}")
+
     def process_sonarr(self, dry_run: bool = False):
         """Process all Sonarr series and check episode files"""
         if self.interactive:
@@ -543,29 +577,15 @@ class MediaQualityChecker:
                         if not dry_run:
                             # Capture episode ids before deleting the file mapping.
                             episode_ids = self.get_episodes_for_file(series_id, file_id)
-                            # Delete the episode file to trigger re-download
-                            print("     Deleting file to trigger re-download...")
-                            self._make_request(
-                                self.sonarr_url,
-                                self.sonarr_api,
-                                f'episodefile/{file_id}',
-                                method='DELETE',
+                            self._delete_file_and_trigger_search(
+                                url=self.sonarr_url,
+                                api_key=self.sonarr_api,
+                                file_endpoint=f'episodefile/{file_id}',
                                 auth=self.sonarr_http_auth,
+                                search_payload={'name': 'EpisodeSearch', 'episodeIds': episode_ids} if episode_ids else None,
+                                trigger_message='Triggering episode search...',
+                                missing_search_message='Could not resolve episode IDs before delete; search not triggered',
                             )
-
-                            # Trigger search for the episodes
-                            if episode_ids:
-                                print("     Triggering episode search...")
-                                self._make_request(
-                                    self.sonarr_url,
-                                    self.sonarr_api,
-                                    'command',
-                                    method='POST',
-                                    data={'name': 'EpisodeSearch', 'episodeIds': episode_ids},
-                                    auth=self.sonarr_http_auth,
-                                )
-                            else:
-                                print("     Could not resolve episode IDs before delete; search not triggered")
                         else:
                             print("     [DRY RUN] Would delete and re-download")
                 else:
@@ -684,25 +704,13 @@ class MediaQualityChecker:
                     print(f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}")
 
                     if not dry_run:
-                        # Delete the movie file to trigger re-download
-                        print("     Deleting file to trigger re-download...")
-                        self._make_request(
-                            self.radarr_url,
-                            self.radarr_api,
-                            f'moviefile/{file_id}',
-                            method='DELETE',
+                        self._delete_file_and_trigger_search(
+                            url=self.radarr_url,
+                            api_key=self.radarr_api,
+                            file_endpoint=f'moviefile/{file_id}',
                             auth=self.radarr_http_auth,
-                        )
-
-                        # Trigger movie search
-                        print("     Triggering movie search...")
-                        self._make_request(
-                            self.radarr_url,
-                            self.radarr_api,
-                            'command',
-                            method='POST',
-                            data={'name': 'MoviesSearch', 'movieIds': [movie_id]},
-                            auth=self.radarr_http_auth,
+                            search_payload={'name': 'MoviesSearch', 'movieIds': [movie_id]},
+                            trigger_message='Triggering movie search...',
                         )
                     else:
                         print("     [DRY RUN] Would delete and re-download")

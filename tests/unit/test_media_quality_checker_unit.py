@@ -90,14 +90,20 @@ def test_download_release_treats_empty_json_as_success(monkeypatch):
     assert ok is True
 
 
-def test_should_redownload_matrix():
+@pytest.mark.parametrize(
+    ("has_eng_audio", "has_eng_subs", "expected"),
+    [
+        (True, True, False),
+        (False, True, True),
+        (True, False, True),
+    ],
+)
+def test_should_redownload_matrix(has_eng_audio: bool, has_eng_subs: bool, expected: bool):
     checker = _checker()
     checker.require_audio = True
     checker.require_subs = True
 
-    assert checker.should_redownload(True, True) is False
-    assert checker.should_redownload(False, True) is True
-    assert checker.should_redownload(True, False) is True
+    assert checker.should_redownload(has_eng_audio, has_eng_subs) is expected
 
 
 def test_check_file_streams_parses_english_streams(monkeypatch, tmp_path):

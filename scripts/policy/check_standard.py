@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 import subprocess
@@ -45,6 +45,12 @@ TEST_FILE_RE = re.compile(r"^test_[a-z0-9_]*\.py$")
 PROJECT_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 PACKAGE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 ALL_EXPORT_RE = re.compile(r"^\s*__all__\s*=", flags=re.MULTILINE)
+REQUIRED_TEST_DIRS = ("tests/unit", "tests/integration", "tests/gui")
+REQUIRED_PYTEST_MARKERS = {"integration", "gui", "slow"}
+WINDOW_FIXTURE_RE = re.compile(
+    r"@pytest\.fixture(?:\([^)]*\))?\s*[\r\n]+(?:[^\n]*[\r\n])*?def\s+window\s*\(",
+    flags=re.MULTILINE,
+)
 MAX_SRC_FILE_LINES = 600
 LEGACY_ROOT_CONFIG_PATTERNS = (
     "config.toml",
@@ -53,6 +59,8 @@ LEGACY_ROOT_CONFIG_PATTERNS = (
     "*_config_example.toml",
     "*_config_totemp.toml",
 )
+CANONICAL_CONFIG_REQUIRED = ("config/app.defaults.toml", "config/app.example.toml")
+CANONICAL_CONFIG_LOCAL = "config/app.local.toml"
 REQUIRED_NAMING_RULE = "N"
 REQUIRED_QT_NAMING_IGNORES = {
     "activateWindow",
@@ -191,6 +199,10 @@ def require_string_list(
     return [item for item in value if isinstance(item, str)]
 
 
+def parse_marker_name(marker_entry: str) -> str:
+    return marker_entry.split(":", 1)[0].strip()
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     errors: list[str] = []
@@ -269,6 +281,28 @@ def main() -> int:
                                 f"exceptions: {', '.join(missing_ignores)}"
                             )
 
+        pytest_table = tool_table.get("pytest", {}).get("ini_options", {})
+        if not isinstance(pytest_table, dict):
+            errors.append("Missing or invalid [tool.pytest.ini_options] table in pyproject.toml")
+        else:
+            testpaths = pytest_table.get("testpaths")
+            if not isinstance(testpaths, list) or "tests" not in testpaths:
+                errors.append("tool.pytest.ini_options.testpaths must include 'tests'")
+
+            markers = pytest_table.get("markers")
+            if not isinstance(markers, list) or not all(isinstance(item, str) for item in markers):
+                errors.append(
+                    "tool.pytest.ini_options.markers must be a list containing integration/gui/slow"
+                )
+            else:
+                configured_markers = {parse_marker_name(item) for item in markers}
+                missing_markers = sorted(REQUIRED_PYTEST_MARKERS - configured_markers)
+                if missing_markers:
+                    errors.append(
+                        "tool.pytest.ini_options.markers is missing required markers: "
+                        + ", ".join(missing_markers)
+                    )
+
     for rel in ROOT_REQUIRED:
         if rel not in tracked_set:
             errors.append(f"Missing required tracked file: {rel}")
@@ -285,6 +319,36 @@ def main() -> int:
     for rel in WINDOWS_SCRIPT_REQUIRED:
         if rel not in tracked_set:
             errors.append(f"Missing required tracked file: {rel}")
+
+    for rel in REQUIRED_TEST_DIRS:
+        if rel not in tracked_set and not (repo_root / rel).is_dir():
+            errors.append(f"Missing required test directory: {rel}")
+
+    tests_root = repo_root / "tests"
+    if tests_root.is_dir():
+        for test_dir in tests_root.rglob("*"):
+            if not test_dir.is_dir():
+                continue
+            if test_dir.name.startswith(".") or test_dir.name == "__pycache__":
+                continue
+            rel_dir = test_dir.relative_to(repo_root).as_posix()
+            init_file = test_dir / "__init__.py"
+            if not init_file.is_file():
+                errors.append(f"Missing __init__.py in test package directory: {rel_dir}")
+    else:
+        errors.append("Missing tests/ directory")
+
+    conftest_path = repo_root / "tests" / "conftest.py"
+    if not conftest_path.is_file():
+        errors.append("Missing tests/conftest.py")
+    else:
+        try:
+            conftest_content = conftest_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError as exc:
+            errors.append(f"Unable to read tests/conftest.py for fixture policy: {exc}")
+        else:
+            if not WINDOW_FIXTURE_RE.search(conftest_content):
+                errors.append("tests/conftest.py must define a shared @pytest.fixture def window(...)")
 
     if package_name:
         for rel in PACKAGE_REQUIRED:
@@ -312,6 +376,21 @@ def main() -> int:
     legacy_root_configs = sorted(rel for rel in tracked if is_legacy_root_config(rel))
     for rel in legacy_root_configs:
         errors.append(f"Legacy root config filename is not allowed: {rel}")
+
+    if CANONICAL_CONFIG_LOCAL in tracked_set:
+        errors.append(
+            f"Local override config must be untracked: {CANONICAL_CONFIG_LOCAL}"
+        )
+
+    has_toml_app_config = bool(
+        legacy_root_configs
+        or any(rel in tracked_set for rel in CANONICAL_CONFIG_REQUIRED)
+        or CANONICAL_CONFIG_LOCAL in tracked_set
+    )
+    if has_toml_app_config:
+        for rel in CANONICAL_CONFIG_REQUIRED:
+            if rel not in tracked_set:
+                errors.append(f"Missing canonical app config file: {rel}")
 
     for rel in tracked:
         if not rel.endswith(".py"):
@@ -398,4 +477,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

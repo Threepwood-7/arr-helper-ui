@@ -160,6 +160,11 @@ exclude = ["tests", "**/__pycache__"]
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--import-mode=importlib"]
 xfail_strict = true
+markers = [
+  "integration: integration tests",
+  "gui: GUI/Qt tests",
+  "slow: slow tests",
+]
 
 [tool.coverage.run]
 source = ["src/arr_helper"]
