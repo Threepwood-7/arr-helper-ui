@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.installed.cfg
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Hatch
+.hatch/
+
+# uv (uv.lock is committed)
+.uv/
+
+# Testing
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Type checking
+.pyright/
+
+# Ruff
+.ruff_cache/
+
+# Copier rejected chunks
+*.rej
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Distribution
+*.tar.gz
+*.whl
+
+# Local workspace artifacts
+.claude/
+.tmp_localappdata/
+.tmp_scan_root/
+.tmp_wheel_venv/
+
+# App config contract (local overrides + secrets are untracked)
+config/app.local.toml
+config/secrets.toml
+config/*.secrets.toml
+
+# Runtime logs
+*.log

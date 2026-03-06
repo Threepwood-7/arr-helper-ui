@@ -1,0 +1,36 @@
+# arr-helper-ui configuration example
+#
+# Usage:
+# 1) Copy this file to config/app.local.toml
+# 2) Fill your local credentials and host values
+#
+# Optional:
+# - APP_CONFIG_PATH points to a custom local config file path
+# - APP_SECRETS_PATH points to an external secrets TOML file
+# - env secrets override file values:
+#   ARR_HELPER_SONARR_API_KEY
+#   ARR_HELPER_RADARR_API_KEY
+#   ARR_HELPER_SONARR_HTTP_BASIC_AUTH_PASSWORD
+#   ARR_HELPER_RADARR_HTTP_BASIC_AUTH_PASSWORD
+
+[sonarr]
+url = "http://localhost:8989"
+api_key = "your-sonarr-api-key-here"
+enabled = true
+http_basic_auth_username = ""
+http_basic_auth_password = ""
+
+[radarr]
+url = "http://localhost:7878"
+api_key = "your-radarr-api-key-here"
+enabled = true
+http_basic_auth_username = ""
+http_basic_auth_password = ""
+
+[settings]
+dry_run = false
+interactive = true
+require_english_audio = true
+require_english_subs = true
+english_language_codes = ["eng", "en", "english"]
+# highlight_missing_subs = "english"

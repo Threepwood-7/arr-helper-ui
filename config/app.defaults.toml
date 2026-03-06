@@ -1,0 +1,20 @@
+[sonarr]
+url = "http://localhost:8989"
+api_key = "your-sonarr-api-key-here"
+enabled = true
+http_basic_auth_username = ""
+http_basic_auth_password = ""
+
+[radarr]
+url = "http://localhost:7878"
+api_key = "your-radarr-api-key-here"
+enabled = true
+http_basic_auth_username = ""
+http_basic_auth_password = ""
+
+[settings]
+dry_run = false
+interactive = true
+require_english_audio = true
+require_english_subs = true
+english_language_codes = ["eng", "en", "english"]
