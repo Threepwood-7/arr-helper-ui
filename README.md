@@ -4,6 +4,44 @@ A toolkit for managing Sonarr and Radarr libraries:
 - `arr_helper.sonarr_ui.app`: desktop GUI for browsing/managing Sonarr content.
 - `arr_helper.media_checker.app`: CLI checker for required English audio/subtitles.
 
+## Table of Contents
+
+- [Features](#features)
+- [UI Walkthrough](#ui-walkthrough)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Menus](#menus)
+- [Project Structure](#project-structure)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Legal Disclaimer](#legal-disclaimer)
+
+## Features
+
+### Sonarr UI Helper (`arr_helper.sonarr_ui.app`)
+
+PySide6 desktop app for browsing and managing Sonarr series, seasons, and episodes.
+
+- Tree view with series/season/episode hierarchy
+- Monitored status editing
+- ffprobe metadata columns (resolution, bitrates, codecs, HDR, languages)
+- Manual and auto search actions
+- File deletion workflows (delete from disk, unmonitor + delete)
+- Add new show with root folder and quality profile selection
+- Open selected path in system file explorer
+
+### Media Quality Checker (`arr_helper.media_checker.app`)
+
+CLI tool that scans downloaded files in Sonarr/Radarr for required English audio/subtitle streams.
+
+- `dry_run = true`: no destructive changes; reports only
+- `dry_run = false`: files failing requirements are deleted and search commands are triggered
+- `interactive = true`: lets you view/select alternative releases or skip
+
 ## UI Walkthrough
 
 1. Configure sources and review your Sonarr library tree.
@@ -24,70 +62,152 @@ A toolkit for managing Sonarr and Radarr libraries:
 
    Manual-search dialog state for choosing and sending the best release to Sonarr.
 
-## Tools Included
-
-### 1. Sonarr UI Helper (`arr_helper.sonarr_ui.app`)
-
-PySide6 desktop app for browsing and managing Sonarr series, seasons, and episodes.
-
-Key capabilities:
-- Tree view with series/season/episode hierarchy
-- Monitored status editing
-- ffprobe metadata columns (resolution, bitrates, codecs, HDR, languages)
-- Manual and auto search actions
-- File deletion workflows (delete from disk, unmonitor + delete)
-- Add new show with root folder and quality profile selection
-- Open selected path in system file explorer
-
-### 2. Media Quality Checker (`arr_helper.media_checker.app`)
-
-CLI tool that scans downloaded files in Sonarr/Radarr for required English audio/subtitle streams.
-
-Behavior:
-- `dry_run = true`: no destructive changes; reports only
-- `dry_run = false`: files failing requirements are deleted and search commands are triggered
-- `interactive = true`: lets you view/select alternative releases or skip
-
 ## Requirements
 
-- Python 3.10+
-- ffmpeg/ffprobe installed and available in PATH
-- Sonarr and/or Radarr with API access
+- **Windows** (10 or later)
+- **Python 3.10+**
+- **ffmpeg/ffprobe** installed and available in PATH
+- **Sonarr** and/or **Radarr** with API access
 
 Python dependencies are defined in `pyproject.toml`.
 
 ## Installation
 
-```bash
+### First-time Setup
+
+```bat
+python scripts\windows\setup_env.py
+```
+
+Creates the `.venv` by running `uv sync --locked` (falls back to `uv sync` if no lockfile).
+
+Manual alternative for development:
+
+```bat
 uv sync --all-extras
 ```
 
 Fallback (pip):
 
-```bash
+```bat
 python -m pip install -e .[dev]
 ```
 
 Both installs register console scripts: `sonarr-ui-helper` and `media-quality-checker`.
 
-Install ffmpeg if needed:
-```bash
-# Ubuntu/Debian
-sudo apt-get install ffmpeg
+Install ffmpeg if needed (Windows):
 
-# macOS
-brew install ffmpeg
-
-# Windows
-# download from https://ffmpeg.org/download.html
+```bat
+:: download from https://ffmpeg.org/download.html and add to PATH
+:: or via package managers:
+choco install ffmpeg
+scoop install ffmpeg
+winget install Gyan.FFmpeg
 ```
 
-## Quick Start (Windows)
+## Usage
 
-```cmd
-uv sync --all-extras
+### Sonarr UI Helper
+
+#### Recommended (console-less)
+
+```bat
+pyw scripts\windows\run_app_gui.pyw
+```
+
+Launches the GUI without a console window. Auto-bootstraps the `.venv` via `setup_env.py` if not yet created.
+
+#### With console
+
+```bat
 python scripts\windows\run_app.py
+```
+
+Runs via `hatch run python -m arr_helper`. Requires `hatch` in PATH.
+
+#### Direct
+
+```bat
+python -m arr_helper
+:: equivalent explicit GUI entrypoint:
+python -m arr_helper.sonarr_ui.app
+:: or installed script:
+sonarr-ui-helper
+```
+
+#### Display Columns
+
+- Name
+- Size
+- Mon
+- Quality Profile
+- Resolution
+- V.Bitrate
+- V.Codec
+- HDR
+- A.Codec
+- A.Bitrate
+- Audio Lang
+- Sub Lang
+
+#### Manual Search Dialog
+
+Pressing **N** on an episode/season/series opens a Manual Search dialog that lists
+available releases from indexers. The dialog supports:
+
+- Text filter with autocomplete from previous searches
+- Quality and Indexer dropdown filters
+- Sortable columns: Title, Size (GB), Quality, Indexer, Age
+- Double-click a release row to download it
+
+### Media Quality Checker
+
+```bat
+:: media checker stays a manual CLI command:
 python -m arr_helper.media_checker.app
+:: or installed script:
+media-quality-checker
+```
+
+#### Processing Flow
+
+1. Fetch series/movies from enabled services
+2. Inspect file streams via ffprobe
+3. Check against configured language requirements
+4. If failing:
+   - non-interactive: delete file + trigger search
+   - interactive: let user choose alternative, skip, or keep
+5. Cache decisions/results for future runs
+
+#### Safety Notes
+
+- Run with `dry_run = true` first.
+- In non-dry-run mode, this tool can delete files.
+- Interactive mode can permanently remember skip decisions.
+
+#### Example (Interactive)
+
+```text
+X Issue found: Some Show (2024)
+  File: Some.Show.S01E01.1080p.BluRay.x264.mkv
+  English audio: NO
+  English subs: YES
+
+View alternative releases? [Y/n]: y
+
+1) Some.Show.2024.2160p.UHD.BluRay.REMUX-GRP   68.9 GB   Remux-2160p
+2) Some.Show.2024.1080p.BluRay.REMUX-GRP       25.3 GB   Remux-1080p
+3) Some.Show.2024.1080p.BluRay.x264-GRP        12.5 GB   Bluray-1080
+
+Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to keep
+```
+
+#### Automation (cron example)
+
+```bat
+:: Windows Task Scheduler equivalent of cron:
+:: Run every day at 3 AM
+schtasks /create /tn "MediaChecker" /tr "python -m arr_helper.media_checker.app" /sc daily /st 03:00
 ```
 
 ## Configuration
@@ -155,44 +275,19 @@ http_basic_auth_username=myuser
 http_basic_auth_password=mypass
 ```
 
-## Sonarr UI Helper
+### Cache Files
 
-### Run
+Cache/state files are stored under the system temp directory in `temp_arr_helper_ui`.
+If that directory cannot be created, the tools fall back to their local runtime directory.
 
-```bash
-python -m arr_helper
-# equivalent explicit GUI entrypoint:
-python -m arr_helper.sonarr_ui.app
-# or installed script:
-sonarr-ui-helper
-```
+- Windows: `%TEMP%\temp_arr_helper_ui\`
 
-### Display Columns
+Files:
+- `z_fprobe.cache` - ffprobe metadata cache used by `arr_helper.sonarr_ui.app`
+- `z_user.cache` - persistent skip decisions used by `arr_helper.media_checker.app`
+- `z_files.cache` - list of files already validated as good by `arr_helper.media_checker.app`
 
-- Name
-- Size
-- Mon
-- Quality Profile
-- Resolution
-- V.Bitrate
-- V.Codec
-- HDR
-- A.Codec
-- A.Bitrate
-- Audio Lang
-- Sub Lang
-
-### Manual Search Dialog
-
-Pressing **N** on an episode/season/series opens a Manual Search dialog that lists
-available releases from indexers. The dialog supports:
-
-- Text filter with autocomplete from previous searches
-- Quality and Indexer dropdown filters
-- Sortable columns: Title, Size (GB), Quality, Indexer, Age
-- Double-click a release row to download it
-
-### Keyboard Shortcuts
+## Keyboard Shortcuts
 
 | Shortcut | Action |
 |---|---|
@@ -223,57 +318,13 @@ available releases from indexers. The dialog supports:
 | Ctrl+Delete | Unmonitor and delete from disk |
 | F1 | Shortcut help |
 
-### Menus
+## Menus
 
 - **File** — Add Show, Refresh, Clear Cache & Refresh, Quit
 - **View** — Show Missing, Fit Columns, Reset View
 - **Actions** — Monitor, Auto Search, Manual Search, Change Quality Profile, Unmonitor, Delete from Disk, Unmonitor & Delete, Open in Explorer
 - **Tools** — Edit .ini file (opens the QSettings INI in your default editor)
 - **Help** — Keyboard Shortcuts
-
-## Media Quality Checker
-
-### Run
-
-```bash
-# media checker stays a manual CLI command:
-python -m arr_helper.media_checker.app
-# or installed script:
-media-quality-checker
-```
-
-### Processing Flow
-
-1. Fetch series/movies from enabled services
-2. Inspect file streams via ffprobe
-3. Check against configured language requirements
-4. If failing:
-   - non-interactive: delete file + trigger search
-   - interactive: let user choose alternative, skip, or keep
-5. Cache decisions/results for future runs
-
-### Safety Notes
-
-- Run with `dry_run = true` first.
-- In non-dry-run mode, this tool can delete files.
-- Interactive mode can permanently remember skip decisions.
-
-### Example (Interactive)
-
-```text
-X Issue found: Some Show (2024)
-  File: Some.Show.S01E01.1080p.BluRay.x264.mkv
-  English audio: NO
-  English subs: YES
-
-View alternative releases? [Y/n]: y
-
-1) Some.Show.2024.2160p.UHD.BluRay.REMUX-GRP   68.9 GB   Remux-2160p
-2) Some.Show.2024.1080p.BluRay.REMUX-GRP       25.3 GB   Remux-1080p
-3) Some.Show.2024.1080p.BluRay.x264-GRP        12.5 GB   Bluray-1080
-
-Options: Enter release number, 's' to search, 'c' to clear, 0 to skip, -1 to keep
-```
 
 ## Project Structure
 
@@ -319,55 +370,54 @@ arr-helper-ui/
 |   `-- test_media_quality_checker_unit.py
 |-- scripts/
 |   `-- windows/
-|       |-- run_app.py                  # Standard app launcher (python -m arr_helper)
-|       |-- run_app_gui.pyw              # Standard GUI launcher
-|       `-- run_tests.py                # Standard test runner
+|       |-- setup_env.py                # Create/verify .venv via uv sync
+|       |-- run_app.py                  # Launch app via hatch run
+|       |-- run_app_gui.pyw              # Launch GUI without console window
+|       `-- run_tests.py                # Run tests via hatch run test
 ```
 
-## Testing
+## Architecture
 
-```bash
+- `src/` layout with two sub-packages: `sonarr_ui` (GUI) and `media_checker` (CLI).
+- `core/` contains shared utilities (ffprobe integration, file locking, path resolution).
+- GUI uses PySide6 with background workers (`QRunnable` + `QThreadPool`) for API calls and ffprobe scans.
+- Media checker runs synchronously in CLI mode, with optional interactive prompts.
+- Both tools share the same QSettings config store for Sonarr/Radarr credentials.
+
+## Development
+
+### Windows Helpers
+
+| Script | Description |
+|---|---|
+| `python scripts\windows\setup_env.py` | Create/verify `.venv` via `uv sync --locked` |
+| `pyw scripts\windows\run_app_gui.pyw` | Launch GUI without console window (auto-bootstraps venv) |
+| `python scripts\windows\run_app.py` | Launch app via `hatch run` (requires hatch in PATH) |
+| `python scripts\windows\run_tests.py` | Run test suite via `hatch run test` |
+
+### Testing
+
+```bat
 uv run pytest
 ```
 
-## Quality Checks
+Tests run headless (`QT_QPA_PLATFORM=offscreen`) and cover API interaction,
+cache logic, Qt window lifecycle, and the quality checker's decision logic.
 
-```bash
+### Quality Checks
+
+```bat
 uv run ruff check .
 uv run mypy src
 uv run python -m build
 uv run pip-audit
 ```
 
-## Pre-commit
+### Pre-commit
 
-```bash
+```bat
 uv run pre-commit install
 uv run pre-commit run --all-files
-```
-
-Tests run headless (`QT_QPA_PLATFORM=offscreen`) and cover API interaction,
-cache logic, Qt window lifecycle, and the quality checker's decision logic.
-
-## Cache Files
-
-Cache/state files are stored under the system temp directory in `temp_arr_helper_ui`.
-If that directory cannot be created, the tools fall back to their local runtime directory.
-
-Examples:
-- Windows: `%TEMP%\temp_arr_helper_ui\`
-- Linux/macOS: `${TMPDIR:-/tmp}/temp_arr_helper_ui/`
-
-Files:
-- `z_fprobe.cache` - ffprobe metadata cache used by `arr_helper.sonarr_ui.app`
-- `z_user.cache` - persistent skip decisions used by `arr_helper.media_checker.app`
-- `z_files.cache` - list of files already validated as good by `arr_helper.media_checker.app`
-
-## Automation (cron example)
-
-```bash
-# Run every day at 3 AM
-0 3 * * * cd /path/to/script && PYTHONPATH=src python3 -m arr_helper.media_checker.app >> /var/log/media_checker.log 2>&1
 ```
 
 ## Troubleshooting
@@ -379,7 +429,7 @@ On Windows the tools automatically search common install locations
 
 Verify ffprobe is available:
 
-```bash
+```bat
 ffprobe -version
 ```
 
@@ -394,7 +444,7 @@ ffprobe -version
 - Run the Sonarr UI setup wizard if required keys are missing
 - Ensure at least one of `[sonarr].enabled` or `[radarr].enabled` is `true`
 
-## Warning
+### Destructive operations warning
 
 `arr_helper.media_checker.app` can delete and re-download files. Validate settings with `dry_run = true` before real runs.
 
