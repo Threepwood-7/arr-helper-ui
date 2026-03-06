@@ -50,6 +50,7 @@ htmlcov/
 
 # Local workspace artifacts
 .claude/
+.tmp/
 .tmp_localappdata/
 .tmp_scan_root/
 .tmp_wheel_venv/
@@ -61,3 +62,4 @@ config/*.secrets.toml
 
 # Runtime logs
 *.log
+`r`n

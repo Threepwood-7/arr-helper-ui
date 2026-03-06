@@ -4,6 +4,26 @@ A toolkit for managing Sonarr and Radarr libraries:
 - `arr_helper.sonarr_ui.app`: desktop GUI for browsing/managing Sonarr content.
 - `arr_helper.media_checker.app`: CLI checker for required English audio/subtitles.
 
+## UI Walkthrough
+
+1. Configure sources and review your Sonarr library tree.
+
+   ![Configure sources and review library](docs/images/ui-01-overview.png)
+
+   Overview of series/seasons/episodes with monitored-state and metadata columns.
+
+2. Execute add-show workflow with explicit root/profile choices.
+
+   ![Execute add-show workflow](docs/images/ui-02-workflow.png)
+
+   Add-show dialog state used to onboard new series into your managed library.
+
+3. Review manual-search candidates and execute the selected action.
+
+   ![Review manual search results](docs/images/ui-03-details.png)
+
+   Manual-search dialog state for choosing and sending the best release to Sonarr.
+
 ## Tools Included
 
 ### 1. Sonarr UI Helper (`arr_helper.sonarr_ui.app`)
@@ -18,8 +38,6 @@ Key capabilities:
 - File deletion workflows (delete from disk, unmonitor + delete)
 - Add new show with root folder and quality profile selection
 - Open selected path in system file explorer
-
-![Sonarr UI Helper](docs/images/sonarr_ui_helper_screenshot.jpg)
 
 ### 2. Media Quality Checker (`arr_helper.media_checker.app`)
 
@@ -292,7 +310,9 @@ arr-helper-ui/
 |-- docs/
 |   |-- development.md
 |   |-- images/
-|   |   `-- sonarr_ui_helper_screenshot.jpg
+|   |   |-- ui-01-overview.png
+|   |   |-- ui-02-workflow.png
+|   |   `-- ui-03-details.png
 |   `-- release-checklist.md
 |-- tests/
 |   |-- conftest.py                      # Pytest fixtures (headless Qt setup)
