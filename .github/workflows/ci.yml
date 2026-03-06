@@ -36,6 +36,17 @@ jobs:
       - name: Run type checking
         run: hatch run lint:types
 
+      - name: Run dependency checks
+        run: hatch run lint:deps
+
+      - name: Advisory dead code checks
+        run: hatch run lint:deadcode
+        continue-on-error: true
+
+      - name: Advisory complexity checks
+        run: hatch run lint:complexity
+        continue-on-error: true
+
       - name: Run policy checks
         run: hatch run lint:policy
 
