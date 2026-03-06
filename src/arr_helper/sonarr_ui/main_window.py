@@ -171,12 +171,6 @@ class MainWindow(QMainWindow):
         act = file_menu.addAction('&Add Show')
         act.setShortcut(QKeySequence('Ctrl+N'))
         act.triggered.connect(self._add_show)
-        act = file_menu.addAction('&Refresh')
-        act.setShortcut(QKeySequence('F5'))
-        act.triggered.connect(self._refresh)
-        act = file_menu.addAction('&Clear Cache && Refresh')
-        act.setShortcut(QKeySequence('Ctrl+F5'))
-        act.triggered.connect(self._clear_cache_and_refresh)
         file_menu.addSeparator()
         act = file_menu.addAction('E&xit')
         act.setShortcuts([QKeySequence('Ctrl+Q'), QKeySequence('Alt+X')])
@@ -184,6 +178,13 @@ class MainWindow(QMainWindow):
 
         # View menu
         view_menu = mb.addMenu('&View')
+        act = view_menu.addAction('&Refresh')
+        act.setShortcut(QKeySequence('F5'))
+        act.triggered.connect(self._refresh)
+        act = view_menu.addAction('&Clear Cache && Refresh')
+        act.setShortcut(QKeySequence('Ctrl+F5'))
+        act.triggered.connect(self._clear_cache_and_refresh)
+        view_menu.addSeparator()
         act = view_menu.addAction('E&xpand All')
         act.setShortcut(QKeySequence('Ctrl+E'))
         act.triggered.connect(self._expand_all)
@@ -193,7 +194,7 @@ class MainWindow(QMainWindow):
         act = view_menu.addAction('Collapse S&easons')
         act.setShortcut(QKeySequence('Ctrl+W'))
         act.triggered.connect(self._collapse_all_seasons)
-        act = view_menu.addAction('&Collapse All')
+        act = view_menu.addAction('Co&llapse All')
         act.setShortcut(QKeySequence('Ctrl+Shift+W'))
         act.triggered.connect(self._collapse_all_series)
         view_menu.addSeparator()
@@ -203,9 +204,9 @@ class MainWindow(QMainWindow):
         self.act_show_missing.setShortcut(QKeySequence('Ctrl+M'))
         self.act_show_missing.toggled.connect(self._toggle_missing_from_menu)
         view_menu.addAction(self.act_show_missing)
-        act = view_menu.addAction('Fit &Columns')
+        act = view_menu.addAction('&Fit Columns')
         act.triggered.connect(self._fit_columns)
-        act = view_menu.addAction('&Reset View')
+        act = view_menu.addAction('Reset &View')
         act.setShortcut(QKeySequence('Ctrl+Shift+R'))
         act.triggered.connect(self._reset_view_settings)
 
@@ -241,12 +242,12 @@ class MainWindow(QMainWindow):
 
         # Tools menu
         tools_menu = mb.addMenu('&Tools')
-        act = tools_menu.addAction('Edit .ini file')
+        act = tools_menu.addAction('Edit &.ini File')
         act.triggered.connect(self._edit_ini_file)
 
         # Help menu
         help_menu = mb.addMenu('&Help')
-        act = help_menu.addAction('&Keyboard Shortcuts')
+        act = help_menu.addAction('&Help')
         act.setShortcut(QKeySequence('F1'))
         act.triggered.connect(self._show_help)
 

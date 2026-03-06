@@ -305,15 +305,15 @@ Files:
 | U | Unmonitor selected |
 | D | Delete from disk (keep in Sonarr) |
 | Ctrl+Delete | Unmonitor and delete from disk |
-| F1 | Shortcut help |
+| F1 | Show help |
 
 ## Menus
 
-- **File** — Add Show, Refresh, Clear Cache & Refresh, Quit
-- **View** — Show Missing, Fit Columns, Reset View
+- **File** — Add Show, Quit
+- **View** — Refresh, Clear Cache & Refresh, Show Missing, Fit Columns, Reset View
 - **Actions** — Monitor, Auto Search, Manual Search, Change Quality Profile, Unmonitor, Delete from Disk, Unmonitor & Delete, Open in Explorer
-- **Tools** — Edit .ini file (opens the QSettings INI in your default editor)
-- **Help** — Keyboard Shortcuts
+- **Tools** — Edit .ini File (opens the QSettings INI in your default editor)
+- **Help** — Help
 
 ## Project Structure
 

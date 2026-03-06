@@ -112,11 +112,42 @@ def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
     ini_path = Path(win.preferences_store.fileName())
 
     tools_action = next(act for act in win.menuBar().actions() if act.text() == "&Tools")
-    edit_action = next(act for act in tools_action.menu().actions() if act.text() == "Edit .ini file")
+    edit_action = next(act for act in tools_action.menu().actions() if act.text() == "Edit &.ini File")
     edit_action.trigger()
 
     assert ini_path.exists()
     assert opened == [str(ini_path)]
+
+
+def test_menu_core_actions_match_mnemonics_and_shortcuts(qtbot, monkeypatch):
+    monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
+    win = sui.MainWindow(_MinimalAPI(), settings={})
+    qtbot.addWidget(win)
+
+    menu_actions = {action.text(): action for action in win.menuBar().actions()}
+    assert {"&File", "&View", "&Tools", "&Help"} <= set(menu_actions)
+
+    file_menu = menu_actions["&File"].menu()
+    assert file_menu is not None
+    assert any(action.text() == "&Add Show" for action in file_menu.actions())
+    assert not any(action.text() == "&Refresh" for action in file_menu.actions())
+    exit_action = next(action for action in file_menu.actions() if action.text() == "E&xit")
+    exit_shortcuts = {shortcut.toString() for shortcut in exit_action.shortcuts()}
+    assert {"Ctrl+Q", "Alt+X"} <= exit_shortcuts
+
+    view_menu = menu_actions["&View"].menu()
+    assert view_menu is not None
+    refresh_action = next(action for action in view_menu.actions() if action.text() == "&Refresh")
+    clear_action = next(action for action in view_menu.actions() if action.text() == "&Clear Cache && Refresh")
+    reset_action = next(action for action in view_menu.actions() if action.text() == "Reset &View")
+    assert refresh_action.shortcut().toString() == "F5"
+    assert clear_action.shortcut().toString() == "Ctrl+F5"
+    assert reset_action.shortcut().toString() == "Ctrl+Shift+R"
+
+    help_menu = menu_actions["&Help"].menu()
+    assert help_menu is not None
+    help_action = next(action for action in help_menu.actions() if action.text() == "&Help")
+    assert help_action.shortcut().toString() == "F1"
 
 
 def test_reset_view_only_clears_ui_namespace(qtbot, monkeypatch):
