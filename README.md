@@ -382,10 +382,6 @@ ffprobe -version
 
 ---
 
-**Tags:** sonarr, radarr, pyside6, qt, desktop-app, windows
-
----
-
 <!-- legal-disclaimer:start -->
 ## Legal Disclaimer
 
