@@ -107,6 +107,29 @@ ignore = ["E501"]
 [tool.ruff.lint.isort]
 known-first-party = ["arr_helper"]
 
+[tool.ruff.lint.pep8-naming]
+ignore-names = [
+  "activateWindow",
+  "closeEvent",
+  "eventFilter",
+  "filterAcceptsRow",
+  "headerData",
+  "highlightBlock",
+  "isActive",
+  "isRunning",
+  "keyPressEvent",
+  "lessThan",
+  "mouseReleaseEvent",
+  "paintEvent",
+  "requestInterruption",
+  "setApplicationDisplayName",
+  "setApplicationName",
+  "setOrganizationName",
+  "showEvent",
+  "showNormal",
+  "windowState",
+]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
