@@ -53,8 +53,6 @@ LEGACY_ROOT_CONFIG_PATTERNS = (
     "*_config_example.toml",
     "*_config_totemp.toml",
 )
-CANONICAL_CONFIG_REQUIRED = ("config/app.defaults.toml", "config/app.example.toml")
-CANONICAL_CONFIG_LOCAL = "config/app.local.toml"
 REQUIRED_NAMING_RULE = "N"
 REQUIRED_QT_NAMING_IGNORES = {
     "activateWindow",
@@ -314,21 +312,6 @@ def main() -> int:
     legacy_root_configs = sorted(rel for rel in tracked if is_legacy_root_config(rel))
     for rel in legacy_root_configs:
         errors.append(f"Legacy root config filename is not allowed: {rel}")
-
-    if CANONICAL_CONFIG_LOCAL in tracked_set:
-        errors.append(
-            f"Local override config must be untracked: {CANONICAL_CONFIG_LOCAL}"
-        )
-
-    has_toml_app_config = bool(
-        legacy_root_configs
-        or any(rel in tracked_set for rel in CANONICAL_CONFIG_REQUIRED)
-        or CANONICAL_CONFIG_LOCAL in tracked_set
-    )
-    if has_toml_app_config:
-        for rel in CANONICAL_CONFIG_REQUIRED:
-            if rel not in tracked_set:
-                errors.append(f"Missing canonical app config file: {rel}")
 
     for rel in tracked:
         if not rel.endswith(".py"):

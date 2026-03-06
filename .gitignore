@@ -55,11 +55,6 @@ htmlcov/
 .tmp_scan_root/
 .tmp_wheel_venv/
 
-# App config contract (local overrides + secrets are untracked)
-config/app.local.toml
-config/secrets.toml
-config/*.secrets.toml
 
 # Runtime logs
 *.log
-`r`n

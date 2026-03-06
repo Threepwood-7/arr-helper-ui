@@ -92,25 +92,27 @@ python -m arr_helper.media_checker.app
 
 ## Configuration
 
-Both tools use the standardized TOML config contract:
+Both tools use a typed QSettings runtime config store.
 
-- `config/app.defaults.toml` (tracked defaults)
-- `config/app.example.toml` (tracked template)
-- `config/app.local.toml` (your untracked local overrides)
-- optional secret file: `%APPDATA%/arr-helper-ui/secrets.toml` (Windows) or `~/.config/arr-helper-ui/secrets.toml` (Linux/macOS)
+- Config store backend: QSettings `IniFormat`, user scope
+- Config store id: org `ArrHelperUI`, app `ArrHelperConfig`
+- Secrets are persisted in the same store (plaintext), with env overrides when present:
+  - `ARR_HELPER_SONARR_API_KEY`
+  - `ARR_HELPER_RADARR_API_KEY`
+  - `ARR_HELPER_SONARR_HTTP_BASIC_AUTH_PASSWORD`
+  - `ARR_HELPER_RADARR_HTTP_BASIC_AUTH_PASSWORD`
 
-1. Copy `config/app.example.toml` to `config/app.local.toml`
-2. Fill in Sonarr/Radarr URLs and API keys
-3. Enable/disable each service with its `enabled` flag
+1. Launch `python -m arr_helper` to open the setup wizard
+2. Fill Sonarr/Radarr URLs and API keys
+3. Save and restart the tool
 
 Example:
 
-```toml
+```ini
 [sonarr]
-url = "http://localhost:8989"
-api_key = "your-sonarr-api-key-here"
-enabled = true
-# http_basic_auth_username = ""
+url=http://localhost:8989
+api_key=your-sonarr-api-key
+enabled=true
 # http_basic_auth_password = ""
 
 [radarr]
@@ -147,10 +149,10 @@ english_language_codes = ["eng", "en", "english"]
 
 If your services are behind a reverse proxy with HTTP Basic Auth:
 
-```toml
+```ini
 [sonarr]
-http_basic_auth_username = "myuser"
-http_basic_auth_password = "mypass"
+http_basic_auth_username=myuser
+http_basic_auth_password=mypass
 ```
 
 ## Sonarr UI Helper
@@ -285,8 +287,7 @@ arr-helper-ui/
 |       |-- core/
 |       |   |-- ffprobe.py
 |       |   |-- locking.py
-|       |   |-- paths.py
-|       |   `-- toml_compat.py
+|       |   `-- paths.py
 |       |-- sonarr_ui/
 |       |   |-- api.py
 |       |   |-- app.py                   # Desktop GUI entrypoint
@@ -302,9 +303,6 @@ arr-helper-ui/
 |           |-- app.py                   # CLI checker entrypoint
 |           |-- checker.py
 |           `-- config.py
-|-- config/
-|   |-- app.defaults.toml                # Tracked non-secret defaults
-|   `-- app.example.toml                 # Configuration template
 |-- .pre-commit-config.yaml
 |-- .github/workflows/ci.yml
 |-- docs/
@@ -393,7 +391,7 @@ ffprobe -version
 
 ### Config issues
 
-- Ensure `config/app.local.toml` exists (or set `APP_CONFIG_PATH`)
+- Run the Sonarr UI setup wizard if required keys are missing
 - Ensure at least one of `[sonarr].enabled` or `[radarr].enabled` is `true`
 
 ## Warning
