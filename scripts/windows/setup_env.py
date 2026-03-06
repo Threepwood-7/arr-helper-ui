@@ -35,7 +35,7 @@ def main() -> int:
 
     if not pythonw_exe.exists():
         print(
-            r"ERROR: setup completed but .venv\Scripts\pythonw.exe is still missing.",
+            "ERROR: setup completed but .venv\\Scripts\\pythonw.exe is still missing.",
             file=sys.stderr,
         )
         return 1

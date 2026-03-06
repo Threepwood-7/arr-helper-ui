@@ -40,7 +40,7 @@ def main() -> int:
     if pythonw_exe is None:
         show_error(
             "ERROR: local GUI interpreter not found.\n"
-            "Run: python scripts\windows\setup_env.py"
+            "Run: python scripts\\windows\\setup_env.py"
         )
         return 1
 

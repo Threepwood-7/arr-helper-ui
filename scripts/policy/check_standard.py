@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -39,7 +40,14 @@ WINDOWS_SCRIPT_REQUIRED = (
     "scripts/windows/run_tests.py",
 )
 
-PACKAGE_REQUIRED = ("__init__.py", "__main__.py", "py.typed")
+PACKAGE_REQUIRED = (
+    "__init__.py",
+    "__main__.py",
+    "constants.py",
+    "py.typed",
+    "runtime_paths.py",
+)
+PACKAGE_UTILS_REQUIRED = ("utils/__init__.py", "utils/logging_config.py")
 SRC_MODULE_RE = re.compile(r"^[a-z_][a-z0-9_]*\.py$")
 TEST_FILE_RE = re.compile(r"^test_[a-z0-9_]*\.py$")
 PROJECT_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -85,6 +93,11 @@ REQUIRED_QT_NAMING_IGNORES = {
 }
 LEGAL_DISCLAIMER_START = "<!-- legal-disclaimer:start -->"
 LEGAL_DISCLAIMER_END = "<!-- legal-disclaimer:end -->"
+SILENT_BROAD_EXCEPT_RE = re.compile(
+    r"except\s+Exception(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*:\s*(?:#.*\n\s*)?pass\b",
+    flags=re.MULTILINE,
+)
+MAX_DOCSTRING_WARNINGS = 20
 LEGAL_DISCLAIMER_REQUIRED = """
 ## Legal Disclaimer
 
@@ -201,6 +214,84 @@ def require_string_list(
 
 def parse_marker_name(marker_entry: str) -> str:
     return marker_entry.split(":", 1)[0].strip()
+
+
+def collect_silent_broad_exception_warnings(
+    repo_root: Path,
+    tracked: list[str],
+    warnings: list[str],
+) -> None:
+    for rel in tracked:
+        if not rel.startswith("src/") or not rel.endswith(".py"):
+            continue
+        abs_path = repo_root / rel
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if SILENT_BROAD_EXCEPT_RE.search(content):
+            warnings.append(
+                f"Silent broad exception guidance: replace 'except Exception: pass' in {rel} "
+                "with logging or signal emission."
+            )
+
+
+def _is_public_name(name: str) -> bool:
+    return not name.startswith("_")
+
+
+def collect_docstring_guidance(
+    repo_root: Path,
+    tracked: list[str],
+    warnings: list[str],
+) -> None:
+    warning_count = 0
+    truncated = False
+
+    for rel in tracked:
+        if not rel.startswith("src/") or not rel.endswith(".py"):
+            continue
+
+        abs_path = repo_root / rel
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        try:
+            module = ast.parse(content)
+        except SyntaxError:
+            continue
+
+        if ast.get_docstring(module) is None:
+            warnings.append(f"Docstring guidance: add a module docstring in {rel}.")
+            warning_count += 1
+
+        for node in module.body:
+            if isinstance(node, ast.ClassDef):
+                if _is_public_name(node.name) and ast.get_docstring(node) is None:
+                    warnings.append(
+                        f"Docstring guidance: add class docstring for '{node.name}' in {rel}:{node.lineno}."
+                    )
+                    warning_count += 1
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _is_public_name(node.name) and ast.get_docstring(node) is None:
+                    warnings.append(
+                        f"Docstring guidance: add function docstring for '{node.name}' in {rel}:{node.lineno}."
+                    )
+                    warning_count += 1
+
+            if warning_count >= MAX_DOCSTRING_WARNINGS:
+                truncated = True
+                break
+
+        if truncated:
+            break
+
+    if truncated:
+        warnings.append(
+            f"Docstring guidance output truncated at {MAX_DOCSTRING_WARNINGS} warnings."
+        )
 
 
 def main() -> int:
@@ -355,6 +446,10 @@ def main() -> int:
             package_file = f"src/{package_name}/{rel}"
             if package_file not in tracked_set:
                 errors.append(f"Missing required tracked file: {package_file}")
+        for rel in PACKAGE_UTILS_REQUIRED:
+            package_file = f"src/{package_name}/{rel}"
+            if package_file not in tracked_set:
+                errors.append(f"Missing required tracked file: {package_file}")
         package_init_file = f"src/{package_name}/__init__.py"
         if package_init_file in tracked_set:
             try:
@@ -453,6 +548,9 @@ def main() -> int:
             continue
         if "w/crlf" in meta:
             errors.append(f"CRLF line ending detected in tracked text file: {rel}")
+
+    collect_silent_broad_exception_warnings(repo_root, tracked, warnings)
+    collect_docstring_guidance(repo_root, tracked, warnings)
 
     if errors:
         print("Project policy check failed with the following issues:", file=sys.stderr)
