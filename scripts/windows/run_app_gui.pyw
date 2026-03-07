@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from _common import ensure_venv, get_pythonw
 
 
 def show_error(message: str) -> None:
@@ -19,25 +20,18 @@ def show_error(message: str) -> None:
         print(message, file=sys.stderr)
 
 
-def ensure_local_pythonw(repo_root: Path) -> Path | None:
-    pythonw_exe = repo_root / ".venv" / "Scripts" / "pythonw.exe"
-    if pythonw_exe.exists():
-        return pythonw_exe
-
-    setup_script = repo_root / "scripts" / "windows" / "setup_env.py"
-    python_exe = shutil.which("python") or shutil.which("py")
-    if setup_script.exists() and python_exe:
-        subprocess.run([python_exe, str(setup_script)], cwd=repo_root, check=False)
-
-    if pythonw_exe.exists():
-        return pythonw_exe
-    return None
-
-
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
-    pythonw_exe = ensure_local_pythonw(repo_root)
-    if pythonw_exe is None:
+    rc = ensure_venv(repo_root)
+    if rc != 0:
+        show_error(
+            "ERROR: failed to create local environment.\n"
+            "Run: python scripts\\windows\\setup_env.py"
+        )
+        return rc
+
+    pythonw_exe = get_pythonw(repo_root)
+    if not pythonw_exe.exists():
         show_error(
             "ERROR: local GUI interpreter not found.\n"
             "Run: python scripts\\windows\\setup_env.py"
