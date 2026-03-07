@@ -9,7 +9,21 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings
+from threep_commons.config_helpers import (
+    coerce_bool as _shared_coerce_bool,
+)
+from threep_commons.config_helpers import (
+    deep_merge_dicts as _shared_deep_merge_dicts,
+)
+from threep_commons.config_helpers import (
+    schema_key_path as _shared_schema_key_path,
+)
+from threep_commons.config_helpers import (
+    set_nested_value as _shared_set_nested_value,
+)
+from threep_commons.qsettings_store import create_qsettings, qsettings_store_file_path
 
+from ..constants import APP_IDENTITY, SETTINGS_APP_NAME
 from ..core.locking import (
     acquire_lock_file as _core_acquire_lock_file,
 )
@@ -23,11 +37,6 @@ from ..core.locking import (
     write_json_atomic_locked as _core_write_json_atomic_locked,
 )
 from ..core.paths import get_app_cache_dir
-from ..runtime_paths import (
-    SETTINGS_APP_NAME,
-    SETTINGS_ORG_NAME,
-    configure_qsettings,
-)
 
 APP_SLUG = "arr_helper"
 
@@ -146,57 +155,12 @@ def _write_json_atomic_locked(path: str, payload: dict, indent: int = 2) -> None
     _core_write_json_atomic_locked(path, payload, indent=indent)
 
 
-def _deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    merged: dict[str, Any] = dict(base)
-    for key, value in overlay.items():
-        base_value = merged.get(key)
-        if isinstance(base_value, dict) and isinstance(value, dict):
-            merged[key] = _deep_merge_dicts(base_value, value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _set_nested_value(target: dict[str, Any], key_path: tuple[str, ...], value: Any) -> None:
-    current: dict[str, Any] = target
-    for key in key_path[:-1]:
-        next_value = current.get(key)
-        if not isinstance(next_value, dict):
-            next_value = {}
-            current[key] = next_value
-        current = next_value
-    current[key_path[-1]] = value
-
-
-def _schema_config_path(schema_key: str) -> tuple[str, ...]:
-    parts = tuple(schema_key.split("/"))
-    if parts and parts[0] == "config":
-        return parts[1:]
-    return parts
-
-
 def _new_config_settings() -> QSettings:
-    configure_qsettings()
-    return QSettings(
-        QSettings.Format.IniFormat,
-        QSettings.Scope.UserScope,
-        SETTINGS_ORG_NAME,
-        SETTINGS_APP_NAME,
-    )
+    return create_qsettings(APP_IDENTITY)
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        token = value.strip().lower()
-        if token in {"1", "true", "yes", "on"}:
-            return True
-        if token in {"0", "false", "no", "off"}:
-            return False
-    return bool(default)
+    return _shared_coerce_bool(value, default)
 
 
 def _coerce_str_list(value: Any, default: list[str]) -> list[str]:
@@ -235,6 +199,9 @@ def _settings_file_path(settings: QSettings) -> str:
     file_name = str(settings.fileName() or "").strip()
     if file_name:
         return file_name
+    fallback = qsettings_store_file_path(APP_IDENTITY)
+    if fallback:
+        return fallback
     return str(Path.cwd() / f"{SETTINGS_APP_NAME}.ini")
 
 
@@ -255,7 +222,7 @@ class Config:
         for key, value_type, default in CONFIG_SCHEMA:
             raw = self._settings.value(key, default)
             value = _coerce_value(raw, value_type, default)
-            _set_nested_value(merged, _schema_config_path(key), value)
+            _shared_set_nested_value(merged, _shared_schema_key_path(key), value)
         self._apply_secret_env_overrides(merged)
         return merged
 
@@ -267,13 +234,13 @@ class Config:
         for env_name, key_path in SECRET_ENV_TO_KEYS:
             env_value = os.environ.get(env_name, "")
             if env_value:
-                _set_nested_value(config, key_path, env_value)
+                _shared_set_nested_value(config, key_path, env_value)
 
     def save(self, new_config: dict[str, Any] | None = None) -> None:
         if new_config is not None:
-            self.config = _deep_merge_dicts(copy.deepcopy(DEFAULT_CONFIG), new_config)
+            self.config = _shared_deep_merge_dicts(copy.deepcopy(DEFAULT_CONFIG), new_config)
         for key, value_type, default in CONFIG_SCHEMA:
-            path = _schema_config_path(key)
+            path = _shared_schema_key_path(key)
             current: Any = self.config
             for part in path:
                 if not isinstance(current, dict):

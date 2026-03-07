@@ -17,6 +17,10 @@ def main() -> int:
     if rc != 0:
         return rc
 
+    rc = ensure_test_dependencies(repo_root)
+    if rc != 0:
+        return rc
+
     python_exe = get_python(repo_root)
     if not python_exe.exists():
         print("ERROR: local interpreter not found at .venv\\Scripts\\python.exe.", file=sys.stderr)

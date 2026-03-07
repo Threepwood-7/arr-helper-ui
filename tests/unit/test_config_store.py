@@ -3,16 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSettings
+from threep_commons.paths import configure_qsettings
 
+from arr_helper.constants import APP_IDENTITY, SETTINGS_APP_NAME, SETTINGS_ORG_NAME
 from arr_helper.core.paths import get_app_cache_dir
 from arr_helper.media_checker.config import Config
-from arr_helper.runtime_paths import SETTINGS_APP_NAME, SETTINGS_ORG_NAME, configure_qsettings
 
 
 def test_config_save_uses_config_namespace(monkeypatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "cfg"
     monkeypatch.setenv("CONFIG_DIR", str(config_dir))
-    configure_qsettings(str(config_dir))
+    configure_qsettings(APP_IDENTITY, config_dir_override=str(config_dir))
 
     cfg = Config()
     cfg.save()

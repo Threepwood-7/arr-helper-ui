@@ -1,7 +1,8 @@
 """Sonarr UI package."""
 
+from ..constants import SETTINGS_APP_NAME, SETTINGS_ORG_NAME
 from .api import SonarrAPI
-from .main_window import SETTINGS_APP_NAME, SETTINGS_ORG_NAME, MainWindow
+from .main_window import MainWindow
 from .probe_cache import (
     _PROBE_CACHE_LOCK_PATH,
     _PROBE_CACHE_PATH,

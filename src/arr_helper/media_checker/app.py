@@ -7,9 +7,10 @@ from typing import Any, cast
 
 from rich import box
 from rich.panel import Panel
+from threep_commons.paths import configure_qsettings
 
+from ..constants import APP_IDENTITY
 from ..core.ffprobe import find_ffprobe
-from ..runtime_paths import configure_qsettings
 from .checker import MediaQualityChecker
 from .config import Config
 
@@ -24,7 +25,7 @@ def _print_config_errors_and_exit(config: Config, errors: list[str]) -> None:
 
 
 def main() -> int:
-    configure_qsettings()
+    configure_qsettings(APP_IDENTITY)
     config = Config()
     validation_errors = config.validate(context="media_checker")
     if validation_errors:

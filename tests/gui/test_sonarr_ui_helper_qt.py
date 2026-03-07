@@ -1,8 +1,10 @@
 from pathlib import Path
 
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QCloseEvent, QStandardItem
 from PySide6.QtWidgets import QMessageBox
 
+from arr_helper.constants import SETTINGS_APP_NAME
 from arr_helper.sonarr_ui import main_window as sui
 
 
@@ -95,9 +97,9 @@ def test_mainwindow_uses_ini_qsettings_backend(qtbot, monkeypatch):
     qtbot.addWidget(win)
 
     ini_path = Path(win.preferences_store.fileName())
-    assert win.preferences_store.format() == sui.QSettings.IniFormat
+    assert win.preferences_store.format() == QSettings.IniFormat
     assert ini_path.suffix.lower() == ".ini"
-    assert ini_path.stem == sui.SETTINGS_APP_NAME
+    assert ini_path.stem == SETTINGS_APP_NAME
     assert win._settings is win.preferences_store
 
 

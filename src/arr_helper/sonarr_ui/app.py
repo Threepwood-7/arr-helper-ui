@@ -5,10 +5,11 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
+from threep_commons.paths import configure_qsettings
 
+from ..constants import APP_IDENTITY
 from ..core.ffprobe import find_ffprobe
 from ..media_checker.config import Config
-from ..runtime_paths import configure_qsettings
 from .api import SonarrAPI
 from .dialogs.setup_wizard import run_setup_wizard
 from .main_window import MainWindow
@@ -32,7 +33,7 @@ def _show_validation_failure_and_exit(errors: list[str], config_loader: Config) 
 
 
 def main() -> int:
-    configure_qsettings()
+    configure_qsettings(APP_IDENTITY)
     _load_probe_cache()
 
     ffprobe_path = find_ffprobe()

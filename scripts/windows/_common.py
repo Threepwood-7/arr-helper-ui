@@ -3,14 +3,18 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 TEST_DEPENDENCIES = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+
     "pytest-qt>=4.4",
     "PySide6>=6.10.2",
-    "qbittorrent-api>=2025.11.1",
+
 ]
 
 

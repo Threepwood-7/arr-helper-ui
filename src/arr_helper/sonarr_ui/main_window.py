@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QModelIndex, QSettings, Qt
+from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from threep_commons.qsettings_store import create_qsettings
 
-from ..runtime_paths import SETTINGS_APP_NAME, SETTINGS_ORG_NAME, configure_qsettings
+from ..constants import APP_IDENTITY
 from .api import SonarrAPI
 from .dialogs.add_show import AddShowDialog
 from .dialogs.manual_search import ManualSearchDialog
@@ -54,19 +55,14 @@ from .roles import (
 )
 from .workers import ApiActionWorker, LoadWorker
 
+
 class MainWindow(QMainWindow):
     def __init__(self, api: SonarrAPI, loader_api: SonarrAPI | None = None, settings: dict = None):
         super().__init__()
-        configure_qsettings()
         self.api = api
         self.loader_api = loader_api or api
         self.cfg = settings or {}
-        self.preferences_store = QSettings(
-            QSettings.IniFormat,
-            QSettings.UserScope,
-            SETTINGS_ORG_NAME,
-            SETTINGS_APP_NAME,
-        )
+        self.preferences_store = create_qsettings(APP_IDENTITY)
         self._settings = self.preferences_store
         self.setWindowTitle('Sonarr UI Helper')
         self.resize(1600, 800)
