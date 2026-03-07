@@ -150,6 +150,60 @@ def count_text_lines(text: str) -> int:
     return text.count("\n") + 1
 
 
+def has_utf8_bom(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(3) == b"\xef\xbb\xbf"
+    except OSError:
+        return False
+
+
+def has_module_package_name_collisions(tracked: list[str], package_name: str) -> bool:
+    prefix = f"src/{package_name}/"
+    module_names: set[str] = set()
+    package_names: set[str] = set()
+    for rel in tracked:
+        if not rel.startswith(prefix):
+            continue
+        parts = Path(rel).parts
+        if len(parts) < 4:
+            continue
+        tail = parts[3:]
+        if len(tail) == 1 and tail[0].endswith(".py"):
+            stem = Path(tail[0]).stem
+            if stem not in {"__init__", "__main__"}:
+                module_names.add(stem)
+        if len(tail) >= 2 and tail[1] == "__init__.py":
+            package_names.add(tail[0])
+    return bool(module_names & package_names)
+
+
+def validate_main_entrypoint_contract(
+    repo_root: Path,
+    package_name: str,
+    tracked_set: set[str],
+    errors: list[str],
+) -> None:
+    main_rel = f"src/{package_name}/__main__.py"
+    if main_rel not in tracked_set:
+        return
+    main_path = repo_root / main_rel
+    try:
+        content = main_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError as exc:
+        errors.append(f"Unable to read {main_rel} for entrypoint contract: {exc}")
+        return
+
+    if "from __future__ import annotations" not in content:
+        errors.append(f"{main_rel} must include 'from __future__ import annotations'.")
+
+    if not re.search(r"if __name__\s*==\s*['\"]__main__['\"]\s*:", content):
+        errors.append(f"{main_rel} must guard execution with if __name__ == \"__main__\":")
+
+    if not re.search(r"raise\s+SystemExit\(\s*main\(\)\s*\)", content):
+        errors.append(f"{main_rel} must end with 'raise SystemExit(main())' in the guard block.")
+
+
 def check_legal_disclaimer(readme_content: str, errors: list[str]) -> None:
     pattern = re.compile(
         rf"{re.escape(LEGAL_DISCLAIMER_START)}\s*(.*?)\s*{re.escape(LEGAL_DISCLAIMER_END)}",
@@ -462,6 +516,12 @@ def main() -> int:
             else:
                 if not ALL_EXPORT_RE.search(package_init_content):
                     errors.append(f"Missing required __all__ export list in {package_init_file}")
+        validate_main_entrypoint_contract(repo_root, package_name, tracked_set, errors)
+        if has_module_package_name_collisions(tracked, package_name):
+            errors.append(
+                f"Module/package collision detected in src/{package_name}: avoid name pairs like "
+                "'utils.py' and 'utils/__init__.py'."
+            )
 
     for rel in tracked:
         lower = rel.lower()
@@ -548,6 +608,12 @@ def main() -> int:
             continue
         if "w/crlf" in meta:
             errors.append(f"CRLF line ending detected in tracked text file: {rel}")
+
+    for rel in tracked:
+        if to_suffix(rel) not in TEXT_SUFFIXES:
+            continue
+        if has_utf8_bom(repo_root / rel):
+            errors.append(f"UTF-8 BOM is not allowed in tracked text file: {rel}")
 
     collect_silent_broad_exception_warnings(repo_root, tracked, warnings)
     collect_docstring_guidance(repo_root, tracked, warnings)
