@@ -1,5 +1,6 @@
 """ffprobe cache and probing helpers for Sonarr UI."""
 
+import contextlib
 import json
 import os
 import subprocess
@@ -74,7 +75,7 @@ def _acquire_probe_lock(timeout_s: float = 10.0) -> tuple[int, str]:
                 except OSError:
                     pass
             if time.time() >= deadline:
-                raise TimeoutError(f'Timeout acquiring cache lock: {_PROBE_CACHE_LOCK_PATH}')
+                raise TimeoutError(f'Timeout acquiring cache lock: {_PROBE_CACHE_LOCK_PATH}') from None
             time.sleep(0.05)
 
 
@@ -168,10 +169,8 @@ def probe_file(file_path: str) -> dict:
         'sub_langs': [],
         'size_bytes': 0,
     }
-    try:
+    with contextlib.suppress(OSError):
         info['size_bytes'] = os.path.getsize(file_path)
-    except OSError:
-        pass
 
     # check cache — keyed by path, invalidated if size changed or fields missing
     with _probe_cache_lock:

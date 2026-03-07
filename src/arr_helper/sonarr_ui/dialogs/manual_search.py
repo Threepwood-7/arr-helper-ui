@@ -211,13 +211,12 @@ class ManualSearchDialog(QDialog):
 
     def _save_filter_history(self):
         text = self.filter_input.text().strip()
-        if text and self._settings:
-            if text not in self._filter_history:
-                self._filter_history.append(text)
-                # keep last 50
-                self._filter_history = self._filter_history[-50:]
-                self._settings.setValue(self._ui_key('search_filter_history'), self._filter_history)
-                self._completer_model.setStringList(self._filter_history)
+        if text and self._settings and text not in self._filter_history:
+            self._filter_history.append(text)
+            # keep last 50
+            self._filter_history = self._filter_history[-50:]
+            self._settings.setValue(self._ui_key('search_filter_history'), self._filter_history)
+            self._completer_model.setStringList(self._filter_history)
 
     def _save_column_widths(self):
         if self._settings:

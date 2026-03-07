@@ -61,7 +61,7 @@ def acquire_lock_file(
                 except OSError:
                     pass
             if time.time() >= deadline:
-                raise TimeoutError(f'Timeout acquiring lock: {lock_path}')
+                raise TimeoutError(f'Timeout acquiring lock: {lock_path}') from None
             time.sleep(0.05)
 
 

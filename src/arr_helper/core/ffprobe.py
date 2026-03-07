@@ -55,7 +55,7 @@ def _windows_candidates() -> list[str]:
         candidates.append(os.path.join(base, 'ffprobe.exe'))
 
     # Chocolatey
-    choco = os.environ.get('ChocolateyInstall', r'C:\ProgramData\chocolatey')
+    choco = os.environ.get('CHOCOLATEYINSTALL', r'C:\ProgramData\chocolatey')
     candidates.append(os.path.join(choco, 'bin', 'ffprobe.exe'))
 
     # Scoop

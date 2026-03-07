@@ -1,6 +1,8 @@
 """Add-show dialog for Sonarr UI."""
 
 
+import contextlib
+
 import requests
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -152,10 +154,8 @@ class AddShowDialog(QDialog):
         except requests.exceptions.HTTPError as e:
             body = ''
             if e.response is not None:
-                try:
+                with contextlib.suppress(Exception):
                     body = e.response.text
-                except Exception:
-                    pass
             QMessageBox.critical(self, 'Error', f'Failed to add series:\n{e}\n\n{body}')
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to add series:\n{e}')

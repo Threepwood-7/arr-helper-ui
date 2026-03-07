@@ -6,9 +6,8 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QSettings
 from threep_commons.config_helpers import (
     coerce_bool as _shared_coerce_bool,
 )
@@ -37,6 +36,9 @@ from ..core.locking import (
     write_json_atomic_locked as _core_write_json_atomic_locked,
 )
 from ..core.paths import get_app_cache_dir
+
+if TYPE_CHECKING:
+    from PySide6.QtCore import QSettings
 
 APP_SLUG = "arr_helper"
 

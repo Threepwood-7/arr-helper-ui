@@ -57,7 +57,7 @@ from .workers import ApiActionWorker, LoadWorker
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, api: SonarrAPI, loader_api: SonarrAPI | None = None, settings: dict = None):
+    def __init__(self, api: SonarrAPI, loader_api: SonarrAPI | None = None, settings: dict | None = None):
         super().__init__()
         self.api = api
         self.loader_api = loader_api or api
@@ -466,7 +466,7 @@ class MainWindow(QMainWindow):
         codes = [c.lower() for c in self.cfg.get('english_language_codes', [hl])]
         if not codes:
             codes = [hl]
-        langs = {l.strip().lower() for l in sub_langs.split(',') if l.strip()}
+        langs = {lang.strip().lower() for lang in sub_langs.split(',') if lang.strip()}
         if not langs.intersection(codes):
             bg = QColor(255, 200, 200)
             for cell in row:

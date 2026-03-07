@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import requests
 from rich import box
@@ -13,15 +14,17 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from ..core.ffprobe import ffprobe_subprocess_kwargs
-from .config import Config
+
+if TYPE_CHECKING:
+    from .config import Config
 
 
 class MediaQualityChecker:
     def __init__(self, sonarr_url: str, sonarr_api: str, radarr_url: str, radarr_api: str,
                  require_audio: bool = True, require_subs: bool = True,
-                 english_codes: list[str] = None, interactive: bool = False,
+                 english_codes: list[str] | None = None, interactive: bool = False,
                  config: 'Config' = None,
-                 sonarr_http_auth: tuple = None, radarr_http_auth: tuple = None,
+                 sonarr_http_auth: tuple | None = None, radarr_http_auth: tuple | None = None,
                  ffprobe_path: str = 'ffprobe'):
         self.sonarr_url = sonarr_url.rstrip('/')
         self.sonarr_api = sonarr_api
@@ -106,8 +109,8 @@ class MediaQualityChecker:
         api_key: str,
         endpoint: str,
         method: str = 'GET',
-        data: dict = None,
-        auth: tuple = None,
+        data: dict | None = None,
+        auth: tuple | None = None,
     ) -> dict | None:
         """Make API request to Sonarr/Radarr"""
         headers = {'X-Api-Key': api_key}
@@ -183,14 +186,12 @@ class MediaQualityChecker:
                 language = tags.get('language', '').lower()
 
                 # Check for English audio
-                if codec_type == 'audio':
-                    if language in self.english_codes:
-                        has_eng_audio = True
+                if codec_type == 'audio' and language in self.english_codes:
+                    has_eng_audio = True
 
                 # Check for English subtitles
-                if codec_type == 'subtitle':
-                    if language in self.english_codes:
-                        has_eng_subs = True
+                if codec_type == 'subtitle' and language in self.english_codes:
+                    has_eng_subs = True
 
             return has_eng_audio, has_eng_subs
 
@@ -208,11 +209,9 @@ class MediaQualityChecker:
         """Determine if file should be re-downloaded based on config"""
         if self.require_audio and not has_eng_audio:
             return True
-        if self.require_subs and not has_eng_subs:
-            return True
-        return False
+        return bool(self.require_subs and not has_eng_subs)
 
-    def get_episode_releases(self, episode_id: int, quality_profile_id: int = None) -> list[dict]:
+    def get_episode_releases(self, episode_id: int, quality_profile_id: int | None = None) -> list[dict]:
         """Get available releases for an episode from Sonarr"""
         endpoint = f'release?episodeId={episode_id}'
         if quality_profile_id:
@@ -246,7 +245,7 @@ class MediaQualityChecker:
 
         return episode_ids
 
-    def get_movie_releases(self, movie_id: int, quality_profile_id: int = None) -> list[dict]:
+    def get_movie_releases(self, movie_id: int, quality_profile_id: int | None = None) -> list[dict]:
         """Get available releases for a movie from Radarr"""
         endpoint = f'release?movieId={movie_id}'
         if quality_profile_id:

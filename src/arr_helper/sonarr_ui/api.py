@@ -29,7 +29,7 @@ class SonarrAPI:
         r.raise_for_status()
         return r.json() if r.text else {}
 
-    def _delete(self, endpoint: str, params: dict = None):
+    def _delete(self, endpoint: str, params: dict | None = None):
         r = requests.delete(f"{self.url}/api/v3/{endpoint}", headers=self.headers, auth=self.auth, params=params or {}, timeout=self.timeout)
         r.raise_for_status()
         return r
