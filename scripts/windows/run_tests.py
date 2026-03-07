@@ -4,12 +4,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _common import ensure_venv, get_python
+from _common import ensure_test_dependencies, ensure_venv, get_python
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     rc = ensure_venv(repo_root)
+    if rc != 0:
+        return rc
+
+    rc = ensure_test_dependencies(repo_root)
     if rc != 0:
         return rc
 
