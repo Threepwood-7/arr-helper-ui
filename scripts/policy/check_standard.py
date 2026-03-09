@@ -73,6 +73,9 @@ PROJECT_KIND_RE = re.compile(
     flags=re.MULTILINE,
 )
 MAX_SRC_FILE_LINES = 600
+MAX_SRC_CLASS_LINES_WARNING = 450
+MAX_SRC_FUNCTION_LINES_WARNING = 120
+MAX_SIZE_GUIDANCE_WARNINGS = 30
 LEGACY_ROOT_CONFIG_PATTERNS = (
     "config.toml",
     "config_example.toml",
@@ -405,6 +408,72 @@ def collect_docstring_guidance(
         )
 
 
+def collect_structure_size_guidance(
+    repo_root: Path,
+    tracked: list[str],
+    warnings: list[str],
+) -> None:
+    warning_count = 0
+    truncated = False
+
+    for rel in tracked:
+        if not rel.startswith("src/") or not rel.endswith(".py"):
+            continue
+
+        abs_path = repo_root / rel
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        try:
+            module = ast.parse(content)
+        except SyntaxError:
+            continue
+
+        for node in module.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            end_lineno = getattr(node, "end_lineno", node.lineno)
+            class_lines = max(1, int(end_lineno) - int(node.lineno) + 1)
+            if class_lines > MAX_SRC_CLASS_LINES_WARNING:
+                warnings.append(
+                    "Structure guidance: oversized class "
+                    f"'{node.name}' has {class_lines} lines in {rel}:{node.lineno}. "
+                    "Prefer feature coordinators or helper components."
+                )
+                warning_count += 1
+            if warning_count >= MAX_SIZE_GUIDANCE_WARNINGS:
+                truncated = True
+                break
+        if truncated:
+            break
+
+        for node in ast.walk(module):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            end_lineno = getattr(node, "end_lineno", node.lineno)
+            function_lines = max(1, int(end_lineno) - int(node.lineno) + 1)
+            if function_lines > MAX_SRC_FUNCTION_LINES_WARNING:
+                warnings.append(
+                    "Structure guidance: oversized function "
+                    f"'{node.name}' has {function_lines} lines in {rel}:{node.lineno}. "
+                    "Prefer extracting focused helper routines."
+                )
+                warning_count += 1
+            if warning_count >= MAX_SIZE_GUIDANCE_WARNINGS:
+                truncated = True
+                break
+        if truncated:
+            break
+
+    if truncated:
+        warnings.append(
+            "Structure guidance output truncated at "
+            f"{MAX_SIZE_GUIDANCE_WARNINGS} warnings."
+        )
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     errors: list[str] = []
@@ -675,6 +744,7 @@ def main() -> int:
             errors.append(f"UTF-8 BOM is not allowed in tracked text file: {rel}")
 
     collect_silent_broad_exception_warnings(repo_root, tracked, warnings)
+    collect_structure_size_guidance(repo_root, tracked, warnings)
     collect_docstring_guidance(repo_root, tracked, warnings)
 
     if errors:
