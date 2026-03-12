@@ -2,8 +2,9 @@
 
 import os
 import platform
-import shutil
 import subprocess
+
+from threep_commons.executables import find_first_available_executable
 
 
 def find_ffprobe() -> str | None:
@@ -11,16 +12,12 @@ def find_ffprobe() -> str | None:
 
     Checks PATH first, then common Windows installation directories.
     """
-    found = shutil.which('ffprobe')
-    if found:
-        return found
-
-    if platform.system() == 'Windows':
-        for path in _windows_candidates():
-            if os.path.isfile(path):
-                return path
-
-    return None
+    candidates = _windows_candidates() if platform.system() == 'Windows' else []
+    found = find_first_available_executable(
+        command_names=('ffprobe',),
+        candidate_paths=candidates,
+    )
+    return str(found) if found is not None else None
 
 
 def ffprobe_subprocess_kwargs() -> dict:

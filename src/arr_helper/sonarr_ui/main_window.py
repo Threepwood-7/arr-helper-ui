@@ -34,13 +34,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from threep_commons.files import open_path_in_default_app
 from threep_commons.qsettings_store import create_qsettings
 
 from ..constants import APP_IDENTITY
 from .api import SonarrAPI
 from .dialogs.add_show import AddShowDialog
 from .dialogs.manual_search import ManualSearchDialog
-from .helpers import _open_path, fmt_size
+from .helpers import fmt_size
 from .probe_cache import clear_probe_cache
 from .roles import (
     ROLE_EPISODE_DATA,
@@ -279,7 +280,7 @@ class MainWindow(QMainWindow):
         try:
             ini_path.parent.mkdir(parents=True, exist_ok=True)
             ini_path.touch(exist_ok=True)
-            _open_path(str(ini_path))
+            open_path_in_default_app(str(ini_path))
             self.status_label.setText(f'Opened settings file: {ini_path}')
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to open settings file:\n{e}')
@@ -1344,19 +1345,19 @@ class MainWindow(QMainWindow):
         if node_type == 'series':
             path = item.data(ROLE_SERIES_PATH)
             if path and os.path.isdir(path):
-                _open_path(path)
+                open_path_in_default_app(path)
             else:
                 self.status_label.setText(f'Directory not found: {path}')
         elif node_type == 'season':
             path = item.data(ROLE_SEASON_PATH)
             if path and os.path.isdir(path):
-                _open_path(path)
+                open_path_in_default_app(path)
             else:
                 self.status_label.setText(f'Directory not found: {path}')
         elif node_type == 'episode':
             path = item.data(ROLE_FILE_PATH)
             if path and os.path.isfile(path):
-                _open_path(path)
+                open_path_in_default_app(path)
             else:
                 self.status_label.setText(f'File not found: {path}')
 

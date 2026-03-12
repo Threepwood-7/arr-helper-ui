@@ -16,18 +16,22 @@ def test_write_json_atomic_locked_writes_payload_and_cleans_lock(tmp_path) -> No
 
 
 def test_find_ffprobe_prefers_path_lookup(monkeypatch) -> None:
-    monkeypatch.setattr(ffprobe.shutil, "which", lambda _: "C:/bin/ffprobe.exe")
+    monkeypatch.setattr(
+        "threep_commons.executables.shutil.which",
+        lambda _: r"C:\bin\ffprobe.exe",
+    )
 
-    assert ffprobe.find_ffprobe() == "C:/bin/ffprobe.exe"
+    assert ffprobe.find_ffprobe() == r"C:\bin\ffprobe.exe"
 
 
-def test_find_ffprobe_uses_windows_candidates(monkeypatch) -> None:
-    monkeypatch.setattr(ffprobe.shutil, "which", lambda _: None)
+def test_find_ffprobe_uses_windows_candidates(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("threep_commons.executables.shutil.which", lambda _: None)
     monkeypatch.setattr(ffprobe.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(ffprobe, "_windows_candidates", lambda: ["C:/x/ffprobe.exe"])
-    monkeypatch.setattr(ffprobe.os.path, "isfile", lambda p: p == "C:/x/ffprobe.exe")
+    candidate = tmp_path / "ffprobe.exe"
+    candidate.write_text("", encoding="utf-8")
+    monkeypatch.setattr(ffprobe, "_windows_candidates", lambda: [str(candidate)])
 
-    assert ffprobe.find_ffprobe() == "C:/x/ffprobe.exe"
+    assert ffprobe.find_ffprobe() == str(candidate)
 
 
 def test_get_app_cache_dir_falls_back_when_creation_fails(monkeypatch, tmp_path) -> None:
