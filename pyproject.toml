@@ -156,7 +156,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.deptry]
-known_first_party = ["arr_helper"]
+known_first_party = ["arr_helper", "_common"]
 
 [tool.basedpyright]
 pythonVersion = "3.13"
