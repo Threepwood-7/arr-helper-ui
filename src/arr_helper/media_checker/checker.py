@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 from rich.table import Table
 
-from ..core.ffprobe import ffprobe_subprocess_kwargs
+from threep_commons.subprocess_helpers import windows_no_window_run_kwargs
 
 if TYPE_CHECKING:
     from .config import Config
@@ -167,7 +167,7 @@ class MediaQualityChecker:
                 capture_output=True,
                 text=True,
                 timeout=60,
-                **ffprobe_subprocess_kwargs(),
+                **windows_no_window_run_kwargs(),
             )
 
             if result.returncode != 0:

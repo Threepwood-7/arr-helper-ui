@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from threep_commons.files import open_path_in_default_app
+from threep_commons.desktop import open_path_in_default_app
 from threep_commons.qsettings_store import create_qsettings
 
 from ..constants import APP_IDENTITY

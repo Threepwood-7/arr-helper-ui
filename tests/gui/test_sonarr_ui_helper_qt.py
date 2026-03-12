@@ -107,7 +107,11 @@ def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
     monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
 
     opened = []
-    monkeypatch.setattr(sui, "_open_path", lambda path: opened.append(path))
+    monkeypatch.setattr(
+        sui,
+        "open_path_in_default_app",
+        lambda path: opened.append(path) or True,
+    )
 
     win = sui.MainWindow(_MinimalAPI(), settings={})
     qtbot.addWidget(win)

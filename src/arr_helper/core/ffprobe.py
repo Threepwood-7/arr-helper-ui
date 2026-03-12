@@ -2,7 +2,6 @@
 
 import os
 import platform
-import subprocess
 
 from threep_commons.executables import find_first_available_executable
 
@@ -18,24 +17,6 @@ def find_ffprobe() -> str | None:
         candidate_paths=candidates,
     )
     return str(found) if found is not None else None
-
-
-def ffprobe_subprocess_kwargs() -> dict:
-    """Return subprocess kwargs to keep ffprobe hidden on Windows."""
-    if platform.system() != 'Windows':
-        return {}
-
-    kwargs = {}
-    try:
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = getattr(subprocess, 'SW_HIDE', 0)
-        kwargs['startupinfo'] = startupinfo
-    except Exception:
-        pass
-
-    kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-    return kwargs
 
 
 def _windows_candidates() -> list[str]:

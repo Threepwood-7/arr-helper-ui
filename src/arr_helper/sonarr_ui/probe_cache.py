@@ -8,8 +8,8 @@ import threading
 import time
 from typing import Any
 
-from ..core.ffprobe import ffprobe_subprocess_kwargs
 from ..core.paths import get_app_cache_dir
+from threep_commons.subprocess_helpers import windows_no_window_run_kwargs
 
 _FFPROBE: str | None = None          # resolved at startup in main()
 
@@ -192,7 +192,7 @@ def probe_file(file_path: str) -> dict:
             capture_output=True,
             text=True,
             timeout=30,
-            **ffprobe_subprocess_kwargs(),
+            **windows_no_window_run_kwargs(),
         )
         if result.returncode != 0:
             return info
