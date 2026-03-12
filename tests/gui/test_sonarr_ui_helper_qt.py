@@ -96,8 +96,8 @@ def test_mainwindow_uses_ini_qsettings_backend(qtbot, monkeypatch):
     win = sui.MainWindow(_MinimalAPI(), settings={})
     qtbot.addWidget(win)
 
-    ini_path = Path(win.preferences_store.fileName())
-    assert win.preferences_store.format() == QSettings.IniFormat
+    ini_path = Path(win.preferences_store.file_name())
+    assert win.preferences_store.qsettings.format() == QSettings.IniFormat
     assert ini_path.suffix.lower() == ".ini"
     assert ini_path.stem == SETTINGS_APP_NAME
     assert win._settings is win.preferences_store
@@ -115,7 +115,7 @@ def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
 
     win = sui.MainWindow(_MinimalAPI(), settings={})
     qtbot.addWidget(win)
-    ini_path = Path(win.preferences_store.fileName())
+    ini_path = Path(win.preferences_store.file_name())
 
     tools_action = next(act for act in win.menuBar().actions() if act.text() == "&Tools")
     edit_action = next(act for act in tools_action.menu().actions() if act.text() == "Edit &.ini File")
@@ -163,8 +163,8 @@ def test_reset_view_only_clears_ui_namespace(qtbot, monkeypatch):
     win = sui.MainWindow(_MinimalAPI(), settings={})
     qtbot.addWidget(win)
 
-    win._settings.setValue("config/sonarr/url", "http://example")
-    win._settings.setValue(win._ui_key("column_widths"), [80] * len(win._columns))
+    win._settings.set_value("config/sonarr/url", "http://example")
+    win._settings.set_value(win._ui_key("column_widths"), [80] * len(win._columns))
     win._settings.sync()
 
     win._reset_view_settings()

@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from threep_commons.desktop import open_path_in_default_app
-from threep_commons.qsettings_store import create_qsettings
+from threep_commons.settings import QSettingsValueStore
 
 from ..constants import APP_IDENTITY
 from .api import SonarrAPI
@@ -63,8 +63,12 @@ class MainWindow(QMainWindow):
         self.api = api
         self.loader_api = loader_api or api
         self.cfg = settings or {}
-        self.preferences_store = create_qsettings(APP_IDENTITY)
+        self.preferences_store = QSettingsValueStore.from_identity(APP_IDENTITY)
         self._settings = self.preferences_store
+        self._ui_settings = QSettingsValueStore(
+            self.preferences_store.qsettings,
+            namespace='ui/sonarr_ui',
+        )
         self.setWindowTitle('Sonarr UI Helper')
         self.resize(1600, 800)
         self._last_worker_error = ''
@@ -264,9 +268,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        self._settings.beginGroup('ui/sonarr_ui')
-        self._settings.remove('')
-        self._settings.endGroup()
+        self._ui_settings.clear_all()
         self._settings.sync()
 
         # Re-apply in-memory defaults immediately.
@@ -276,7 +278,7 @@ class MainWindow(QMainWindow):
 
     def _edit_ini_file(self):
         self._settings.sync()
-        ini_path = Path(self.preferences_store.fileName())
+        ini_path = Path(self.preferences_store.file_name())
         try:
             ini_path.parent.mkdir(parents=True, exist_ok=True)
             ini_path.touch(exist_ok=True)
@@ -1411,7 +1413,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Save column widths and stop worker before closing."""
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
-        self._settings.setValue(self._ui_key('column_widths'), widths)
+        self._settings.set_value(self._ui_key('column_widths'), widths)
         self._settings.sync()
         if not self._stop_action_worker(5000):
             QMessageBox.warning(

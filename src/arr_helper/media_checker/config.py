@@ -6,7 +6,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from threep_commons.config_helpers import (
     coerce_bool as _shared_coerce_bool,
@@ -20,7 +20,7 @@ from threep_commons.config_helpers import (
 from threep_commons.config_helpers import (
     set_nested_value as _shared_set_nested_value,
 )
-from threep_commons.qsettings_store import create_qsettings, qsettings_store_file_path
+from threep_commons.settings import QSettingsValueStore
 
 from ..constants import APP_IDENTITY, SETTINGS_APP_NAME
 from ..core.locking import (
@@ -36,9 +36,6 @@ from ..core.locking import (
     write_json_atomic_locked as _core_write_json_atomic_locked,
 )
 from ..core.paths import get_app_cache_dir
-
-if TYPE_CHECKING:
-    from PySide6.QtCore import QSettings
 
 APP_SLUG = "arr_helper"
 
@@ -157,8 +154,8 @@ def _write_json_atomic_locked(path: str, payload: dict, indent: int = 2) -> None
     _core_write_json_atomic_locked(path, payload, indent=indent)
 
 
-def _new_config_settings() -> QSettings:
-    return create_qsettings(APP_IDENTITY)
+def _new_config_settings() -> QSettingsValueStore:
+    return QSettingsValueStore.from_identity(APP_IDENTITY)
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -196,14 +193,11 @@ def _coerce_value(value: Any, value_type: type, default: Any) -> Any:
     return str(value)
 
 
-def _settings_file_path(settings: QSettings) -> str:
+def _settings_file_path(settings: QSettingsValueStore) -> str:
     settings.sync()
-    file_name = str(settings.fileName() or "").strip()
+    file_name = settings.file_name()
     if file_name:
         return file_name
-    fallback = qsettings_store_file_path(APP_IDENTITY)
-    if fallback:
-        return fallback
     return str(Path.cwd() / f"{SETTINGS_APP_NAME}.ini")
 
 
@@ -250,7 +244,7 @@ class Config:
                     break
                 current = current.get(part, default)
             value = _coerce_value(current, value_type, default)
-            self._settings.setValue(key, value)
+            self._settings.set_value(key, value)
         self._settings.sync()
         self.config_path = _settings_file_path(self._settings)
         self.reload()
