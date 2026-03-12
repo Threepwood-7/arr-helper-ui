@@ -15,7 +15,10 @@ def main() -> int:
 
     python_exe = get_python(repo_root)
     if not python_exe.exists():
-        print("ERROR: local interpreter not found at .venv\\Scripts\\python.exe.", file=sys.stderr)
+        print(
+            "ERROR: local interpreter not found at .venv\\Scripts\\python.exe.",
+            file=sys.stderr,
+        )
         print("Run: python scripts\\windows\\setup_env.py", file=sys.stderr)
         return 1
 

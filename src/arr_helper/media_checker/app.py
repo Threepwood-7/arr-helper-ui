@@ -63,7 +63,9 @@ def main() -> int:
         radarr_api=str(radarr_config.get("api_key", "") if radarr_config else ""),
         require_audio=require_audio,
         require_subs=require_subs,
-        english_codes=list(english_codes) if isinstance(english_codes, list) else ["eng", "en", "english"],
+        english_codes=list(english_codes)
+        if isinstance(english_codes, list)
+        else ["eng", "en", "english"],
         interactive=interactive,
         config=config,
         sonarr_http_auth=cast("Any", _http_auth(sonarr_config)),
@@ -74,7 +76,10 @@ def main() -> int:
     if interactive:
         if dry_run:
             checker.console.print(
-                Panel("[bold yellow]DRY RUN MODE[/bold yellow] - No changes will be made", box=box.DOUBLE)
+                Panel(
+                    "[bold yellow]DRY RUN MODE[/bold yellow] - No changes will be made",
+                    box=box.DOUBLE,
+                )
             )
         else:
             checker.console.print("")
@@ -89,7 +94,9 @@ def main() -> int:
         checker.process_radarr(dry_run)
 
     if interactive:
-        checker.console.print(Panel("[bold green]Complete[/bold green]", box=box.DOUBLE))
+        checker.console.print(
+            Panel("[bold green]Complete[/bold green]", box=box.DOUBLE)
+        )
     else:
         print("\n=== Complete ===")
     return 0

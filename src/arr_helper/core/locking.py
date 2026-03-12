@@ -27,30 +27,32 @@ def acquire_lock_file(
     timeout_s: float = 10.0,
     pid_checker: Callable[[int], bool] | None = None,
 ) -> tuple[int, str]:
-    token = f'{os.getpid()}:{threading.get_ident()}:{time.time_ns()}'
+    token = f"{os.getpid()}:{threading.get_ident()}:{time.time_ns()}"
     deadline = time.time() + timeout_s
     check_pid = pid_checker or pid_is_running
     while True:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, token.encode('ascii', errors='ignore'))
+            os.write(fd, token.encode("ascii", errors="ignore"))
             return fd, token
         except FileExistsError:
             stale = False
             try:
                 age = time.time() - os.path.getmtime(lock_path)
                 if age > 5:
-                    owner = ''
+                    owner = ""
                     try:
                         with open(lock_path) as f:
                             owner = f.read().strip()
                     except OSError:
-                        owner = ''
+                        owner = ""
                     try:
-                        owner_pid = int(owner.split(':', 1)[0]) if owner else 0
+                        owner_pid = int(owner.split(":", 1)[0]) if owner else 0
                     except (TypeError, ValueError):
                         owner_pid = 0
-                    if (owner_pid and not check_pid(owner_pid)) or (not owner_pid and age > 3600):
+                    if (owner_pid and not check_pid(owner_pid)) or (
+                        not owner_pid and age > 3600
+                    ):
                         stale = True
             except OSError:
                 pass
@@ -61,7 +63,7 @@ def acquire_lock_file(
                 except OSError:
                     pass
             if time.time() >= deadline:
-                raise TimeoutError(f'Timeout acquiring lock: {lock_path}') from None
+                raise TimeoutError(f"Timeout acquiring lock: {lock_path}") from None
             time.sleep(0.05)
 
 
@@ -70,7 +72,7 @@ def release_lock_file(lock_path: str, lock_fd: int, token: str):
         os.close(lock_fd)
     finally:
         try:
-            owner = ''
+            owner = ""
             with open(lock_path) as f:
                 owner = f.read().strip()
             if owner == token:
@@ -80,11 +82,11 @@ def release_lock_file(lock_path: str, lock_fd: int, token: str):
 
 
 def write_json_atomic_locked(path: str, payload: dict[str, Any], indent: int = 2):
-    lock_path = f'{path}.lock'
+    lock_path = f"{path}.lock"
     lock_fd, lock_token = acquire_lock_file(lock_path)
-    tmp_path = f'{path}.tmp.{os.getpid()}.{threading.get_ident()}'
+    tmp_path = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
     try:
-        with open(tmp_path, 'w') as f:
+        with open(tmp_path, "w") as f:
             json.dump(payload, f, indent=indent)
             f.flush()
             os.fsync(f.fileno())

@@ -60,7 +60,9 @@ def test_make_request_returns_none_on_non_json_success(monkeypatch):
 
     monkeypatch.setattr(mqc.requests, "get", _fake_get)
 
-    result = checker._make_request(checker.sonarr_url, checker.sonarr_api, "series", auth=checker.sonarr_http_auth)
+    result = checker._make_request(
+        checker.sonarr_url, checker.sonarr_api, "series", auth=checker.sonarr_http_auth
+    )
     assert result is None
 
 
@@ -73,7 +75,9 @@ def test_make_request_uses_explicit_auth(monkeypatch):
         return _Response(json_data={}, text="{}")
 
     monkeypatch.setattr(mqc.requests, "get", _fake_get)
-    checker._make_request(checker.sonarr_url, checker.sonarr_api, "series", auth=("u", "p"))
+    checker._make_request(
+        checker.sonarr_url, checker.sonarr_api, "series", auth=("u", "p")
+    )
     assert seen["auth"] == ("u", "p")
 
 
@@ -98,7 +102,9 @@ def test_download_release_treats_empty_json_as_success(monkeypatch):
         (True, False, True),
     ],
 )
-def test_should_redownload_matrix(has_eng_audio: bool, has_eng_subs: bool, expected: bool):
+def test_should_redownload_matrix(
+    has_eng_audio: bool, has_eng_subs: bool, expected: bool
+):
     checker = _checker()
     checker.require_audio = True
     checker.require_subs = True

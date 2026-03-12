@@ -8,18 +8,19 @@ import threading
 import time
 from typing import Any
 
-from ..core.paths import get_app_cache_dir
 from threep_commons.subprocess_helpers import windows_no_window_run_kwargs
 
-_FFPROBE: str | None = None          # resolved at startup in main()
+from ..core.paths import get_app_cache_dir
+
+_FFPROBE: str | None = None  # resolved at startup in main()
 
 
 def _get_app_cache_dir() -> str:
     return get_app_cache_dir(os.path.dirname(os.path.abspath(__file__)))
 
 
-_PROBE_CACHE_PATH = os.path.join(_get_app_cache_dir(), 'z_fprobe.cache')
-_PROBE_CACHE_LOCK_PATH = f'{_PROBE_CACHE_PATH}.lock'
+_PROBE_CACHE_PATH = os.path.join(_get_app_cache_dir(), "z_fprobe.cache")
+_PROBE_CACHE_LOCK_PATH = f"{_PROBE_CACHE_PATH}.lock"
 _probe_cache: dict = {}
 _probe_cache_lock = threading.RLock()
 
@@ -39,26 +40,26 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def _acquire_probe_lock(timeout_s: float = 10.0) -> tuple[int, str]:
-    token = f'{os.getpid()}:{threading.get_ident()}:{time.time_ns()}'
+    token = f"{os.getpid()}:{threading.get_ident()}:{time.time_ns()}"
     deadline = time.time() + timeout_s
     while True:
         try:
             fd = os.open(_PROBE_CACHE_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, token.encode('ascii', errors='ignore'))
+            os.write(fd, token.encode("ascii", errors="ignore"))
             return fd, token
         except FileExistsError:
             stale = False
             try:
                 age = time.time() - os.path.getmtime(_PROBE_CACHE_LOCK_PATH)
                 if age > 5:
-                    owner = ''
+                    owner = ""
                     try:
                         with open(_PROBE_CACHE_LOCK_PATH) as f:
                             owner = f.read().strip()
                     except OSError:
-                        owner = ''
+                        owner = ""
                     try:
-                        owner_pid = int(owner.split(':', 1)[0]) if owner else 0
+                        owner_pid = int(owner.split(":", 1)[0]) if owner else 0
                     except (TypeError, ValueError):
                         owner_pid = 0
                     if owner_pid and not _pid_is_running(owner_pid):
@@ -75,7 +76,9 @@ def _acquire_probe_lock(timeout_s: float = 10.0) -> tuple[int, str]:
                 except OSError:
                     pass
             if time.time() >= deadline:
-                raise TimeoutError(f'Timeout acquiring cache lock: {_PROBE_CACHE_LOCK_PATH}') from None
+                raise TimeoutError(
+                    f"Timeout acquiring cache lock: {_PROBE_CACHE_LOCK_PATH}"
+                ) from None
             time.sleep(0.05)
 
 
@@ -84,7 +87,7 @@ def _release_probe_lock(lock_fd: int, token: str):
         os.close(lock_fd)
     finally:
         try:
-            owner = ''
+            owner = ""
             with open(_PROBE_CACHE_LOCK_PATH) as f:
                 owner = f.read().strip()
             if owner == token:
@@ -110,8 +113,8 @@ def _save_probe_cache(replace: bool = False):
     with _probe_cache_lock:
         snapshot = dict(_probe_cache)
     lock_fd = None
-    lock_token = ''
-    tmp_path = f'{_PROBE_CACHE_PATH}.tmp.{os.getpid()}.{threading.get_ident()}'
+    lock_token = ""
+    tmp_path = f"{_PROBE_CACHE_PATH}.tmp.{os.getpid()}.{threading.get_ident()}"
     try:
         lock_fd, lock_token = _acquire_probe_lock()
         if not replace and os.path.exists(_PROBE_CACHE_PATH):
@@ -123,7 +126,7 @@ def _save_probe_cache(replace: bool = False):
                     snapshot = existing
             except Exception:
                 pass
-        with open(tmp_path, 'w') as f:
+        with open(tmp_path, "w") as f:
             json.dump(snapshot, f, indent=1)
             f.flush()
             os.fsync(f.fileno())
@@ -149,7 +152,7 @@ def _as_int(value: Any) -> int:
         if isinstance(value, (int, float)):
             return int(value)
         text = str(value).strip()
-        if not text or text.lower() in {'n/a', 'na', 'none', 'null'}:
+        if not text or text.lower() in {"n/a", "na", "none", "null"}:
             return 0
         return int(float(text))
     except (TypeError, ValueError):
@@ -159,33 +162,39 @@ def _as_int(value: Any) -> int:
 def probe_file(file_path: str) -> dict:
     """Return dict with codecs, resolution, bitrates, HDR, languages, size."""
     info: dict = {
-        'video_codec': '',
-        'video_resolution': '',
-        'video_bitrate': '',
-        'audio_codec': '',
-        'audio_bitrate': '',
-        'hdr': '',
-        'audio_langs': [],
-        'sub_langs': [],
-        'size_bytes': 0,
+        "video_codec": "",
+        "video_resolution": "",
+        "video_bitrate": "",
+        "audio_codec": "",
+        "audio_bitrate": "",
+        "hdr": "",
+        "audio_langs": [],
+        "sub_langs": [],
+        "size_bytes": 0,
     }
     with contextlib.suppress(OSError):
-        info['size_bytes'] = os.path.getsize(file_path)
+        info["size_bytes"] = os.path.getsize(file_path)
 
     # check cache — keyed by path, invalidated if size changed or fields missing
     with _probe_cache_lock:
         cached = _probe_cache.get(file_path)
     if (
         cached
-        and cached.get('size_bytes') == info['size_bytes']
-        and cached.get('_probe_ok') is True
+        and cached.get("size_bytes") == info["size_bytes"]
+        and cached.get("_probe_ok") is True
     ):
         return cached
 
     try:
         cmd = [
-            _FFPROBE or 'ffprobe', '-v', 'quiet', '-print_format', 'json',
-            '-show_streams', '-show_format', file_path,
+            _FFPROBE or "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            file_path,
         ]
         result = subprocess.run(
             cmd,
@@ -199,64 +208,69 @@ def probe_file(file_path: str) -> dict:
         data = json.loads(result.stdout)
 
         parsed: dict = {
-            'video_codec': '',
-            'video_resolution': '',
-            'video_bitrate': '',
-            'audio_codec': '',
-            'audio_bitrate': '',
-            'hdr': '',
-            'audio_langs': [],
-            'sub_langs': [],
-            'size_bytes': info['size_bytes'],
+            "video_codec": "",
+            "video_resolution": "",
+            "video_bitrate": "",
+            "audio_codec": "",
+            "audio_bitrate": "",
+            "hdr": "",
+            "audio_langs": [],
+            "sub_langs": [],
+            "size_bytes": info["size_bytes"],
         }
 
-        for s in data.get('streams', []):
-            codec_type = s.get('codec_type', '')
-            lang = s.get('tags', {}).get('language', '')
-            if codec_type == 'video' and not parsed['video_codec']:
-                parsed['video_codec'] = s.get('codec_name', '').upper()
-                w = _as_int(s.get('width', 0))
-                h = _as_int(s.get('height', 0))
+        for s in data.get("streams", []):
+            codec_type = s.get("codec_type", "")
+            lang = s.get("tags", {}).get("language", "")
+            if codec_type == "video" and not parsed["video_codec"]:
+                parsed["video_codec"] = s.get("codec_name", "").upper()
+                w = _as_int(s.get("width", 0))
+                h = _as_int(s.get("height", 0))
                 if w and h:
-                    parsed['video_resolution'] = f'{w}x{h}'
-                vbr = _as_int(s.get('bit_rate', 0))
+                    parsed["video_resolution"] = f"{w}x{h}"
+                vbr = _as_int(s.get("bit_rate", 0))
                 if vbr:
-                    parsed['video_bitrate'] = f'{vbr // 1000} kbps'
-                color_transfer = s.get('color_transfer', '')
-                color_space = s.get('color_space', '')
-                side_data = s.get('side_data_list', [])
-                has_hdr_transfer = color_transfer in ('smpte2084', 'arib-std-b67')
-                has_hdr_space = color_space in ('bt2020nc', 'bt2020c')
-                has_dovi = any(
-                    sd.get('side_data_type', '') in ('DOVI configuration record', 'Dolby Vision configuration')
-                    for sd in side_data
-                ) if side_data else False
+                    parsed["video_bitrate"] = f"{vbr // 1000} kbps"
+                color_transfer = s.get("color_transfer", "")
+                color_space = s.get("color_space", "")
+                side_data = s.get("side_data_list", [])
+                has_hdr_transfer = color_transfer in ("smpte2084", "arib-std-b67")
+                has_hdr_space = color_space in ("bt2020nc", "bt2020c")
+                has_dovi = (
+                    any(
+                        sd.get("side_data_type", "")
+                        in ("DOVI configuration record", "Dolby Vision configuration")
+                        for sd in side_data
+                    )
+                    if side_data
+                    else False
+                )
                 if has_dovi:
-                    parsed['hdr'] = 'DV'
+                    parsed["hdr"] = "DV"
                 elif has_hdr_transfer or has_hdr_space:
-                    parsed['hdr'] = 'HDR'
+                    parsed["hdr"] = "HDR"
                 else:
-                    parsed['hdr'] = 'SDR'
-            elif codec_type == 'audio':
-                if not parsed['audio_codec']:
-                    parsed['audio_codec'] = s.get('codec_name', '').upper()
-                    abr = _as_int(s.get('bit_rate', 0))
+                    parsed["hdr"] = "SDR"
+            elif codec_type == "audio":
+                if not parsed["audio_codec"]:
+                    parsed["audio_codec"] = s.get("codec_name", "").upper()
+                    abr = _as_int(s.get("bit_rate", 0))
                     if abr:
-                        parsed['audio_bitrate'] = f'{abr // 1000} kbps'
+                        parsed["audio_bitrate"] = f"{abr // 1000} kbps"
                 if lang:
-                    parsed['audio_langs'].append(lang)
-            elif codec_type == 'subtitle':
+                    parsed["audio_langs"].append(lang)
+            elif codec_type == "subtitle":
                 if lang:
-                    parsed['sub_langs'].append(lang)
+                    parsed["sub_langs"].append(lang)
 
-        if not parsed['video_bitrate']:
-            fmt_br = _as_int(data.get('format', {}).get('bit_rate', 0))
+        if not parsed["video_bitrate"]:
+            fmt_br = _as_int(data.get("format", {}).get("bit_rate", 0))
             if fmt_br:
-                parsed['video_bitrate'] = f'{fmt_br // 1000} kbps'
+                parsed["video_bitrate"] = f"{fmt_br // 1000} kbps"
     except Exception:
         return info
 
-    parsed['_probe_ok'] = True
+    parsed["_probe_ok"] = True
     with _probe_cache_lock:
         _probe_cache[file_path] = parsed
     return parsed

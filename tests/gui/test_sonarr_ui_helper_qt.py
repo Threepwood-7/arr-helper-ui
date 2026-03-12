@@ -80,7 +80,9 @@ def test_close_event_force_close_blocks_if_worker_still_running(qtbot, monkeypat
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
 
     critical_calls = []
-    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: critical_calls.append((a, k)))
+    monkeypatch.setattr(
+        QMessageBox, "critical", lambda *a, **k: critical_calls.append((a, k))
+    )
 
     event = QCloseEvent()
     win.closeEvent(event)
@@ -117,8 +119,12 @@ def test_tools_menu_edit_ini_file_opens_settings_file(qtbot, monkeypatch):
     qtbot.addWidget(win)
     ini_path = Path(win.preferences_store.file_name())
 
-    tools_action = next(act for act in win.menuBar().actions() if act.text() == "&Tools")
-    edit_action = next(act for act in tools_action.menu().actions() if act.text() == "Edit &.ini File")
+    tools_action = next(
+        act for act in win.menuBar().actions() if act.text() == "&Tools"
+    )
+    edit_action = next(
+        act for act in tools_action.menu().actions() if act.text() == "Edit &.ini File"
+    )
     edit_action.trigger()
 
     assert ini_path.exists()
@@ -137,22 +143,34 @@ def test_menu_core_actions_match_mnemonics_and_shortcuts(qtbot, monkeypatch):
     assert file_menu is not None
     assert any(action.text() == "&Add Show" for action in file_menu.actions())
     assert not any(action.text() == "&Refresh" for action in file_menu.actions())
-    exit_action = next(action for action in file_menu.actions() if action.text() == "E&xit")
+    exit_action = next(
+        action for action in file_menu.actions() if action.text() == "E&xit"
+    )
     exit_shortcuts = {shortcut.toString() for shortcut in exit_action.shortcuts()}
     assert {"Ctrl+Q", "Alt+X"} <= exit_shortcuts
 
     view_menu = menu_actions["&View"].menu()
     assert view_menu is not None
-    refresh_action = next(action for action in view_menu.actions() if action.text() == "&Refresh")
-    clear_action = next(action for action in view_menu.actions() if action.text() == "&Clear Cache && Refresh")
-    reset_action = next(action for action in view_menu.actions() if action.text() == "Reset &View")
+    refresh_action = next(
+        action for action in view_menu.actions() if action.text() == "&Refresh"
+    )
+    clear_action = next(
+        action
+        for action in view_menu.actions()
+        if action.text() == "&Clear Cache && Refresh"
+    )
+    reset_action = next(
+        action for action in view_menu.actions() if action.text() == "Reset &View"
+    )
     assert refresh_action.shortcut().toString() == "F5"
     assert clear_action.shortcut().toString() == "Ctrl+F5"
     assert reset_action.shortcut().toString() == "Ctrl+Shift+R"
 
     help_menu = menu_actions["&Help"].menu()
     assert help_menu is not None
-    help_action = next(action for action in help_menu.actions() if action.text() == "&Help")
+    help_action = next(
+        action for action in help_menu.actions() if action.text() == "&Help"
+    )
     assert help_action.shortcut().toString() == "F1"
 
 
@@ -241,7 +259,9 @@ class _DeleteAPI(_MinimalAPI):
         self.deleted_file_ids.append(file_id)
 
 
-def test_delete_from_disk_episode_keeps_row_when_file_delete_fails(qtbot, monkeypatch, tmp_path):
+def test_delete_from_disk_episode_keeps_row_when_file_delete_fails(
+    qtbot, monkeypatch, tmp_path
+):
     monkeypatch.setattr(sui.MainWindow, "_start_worker", lambda self: None)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)

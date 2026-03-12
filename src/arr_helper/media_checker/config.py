@@ -143,7 +143,9 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def _acquire_lock_file(lock_path: str, timeout_s: float = 10.0) -> tuple[int, str]:
-    return _core_acquire_lock_file(lock_path, timeout_s=timeout_s, pid_checker=_pid_is_running)
+    return _core_acquire_lock_file(
+        lock_path, timeout_s=timeout_s, pid_checker=_pid_is_running
+    )
 
 
 def _release_lock_file(lock_path: str, lock_fd: int, token: str) -> None:
@@ -234,7 +236,9 @@ class Config:
 
     def save(self, new_config: dict[str, Any] | None = None) -> None:
         if new_config is not None:
-            self.config = _shared_deep_merge_dicts(copy.deepcopy(DEFAULT_CONFIG), new_config)
+            self.config = _shared_deep_merge_dicts(
+                copy.deepcopy(DEFAULT_CONFIG), new_config
+            )
         for key, value_type, default in CONFIG_SCHEMA:
             path = _shared_schema_key_path(key)
             current: Any = self.config
@@ -254,8 +258,12 @@ class Config:
         sonarr = self.config.get("sonarr", {}) if isinstance(self.config, dict) else {}
         radarr = self.config.get("radarr", {}) if isinstance(self.config, dict) else {}
 
-        sonarr_enabled = bool(sonarr.get("enabled", True)) if isinstance(sonarr, dict) else False
-        radarr_enabled = bool(radarr.get("enabled", True)) if isinstance(radarr, dict) else False
+        sonarr_enabled = (
+            bool(sonarr.get("enabled", True)) if isinstance(sonarr, dict) else False
+        )
+        radarr_enabled = (
+            bool(radarr.get("enabled", True)) if isinstance(radarr, dict) else False
+        )
 
         if context == "sonarr_ui":
             if not sonarr_enabled:
@@ -288,7 +296,9 @@ class Config:
         return self.get_missing_required(context=context)
 
     def validation_help(self, context: str = "media_checker") -> str:
-        details = "\n".join(f"  - {item}" for item in self.get_missing_required(context=context))
+        details = "\n".join(
+            f"  - {item}" for item in self.get_missing_required(context=context)
+        )
         return (
             "Configuration validation failed:\n"
             f"{details}\n\n"
@@ -342,5 +352,7 @@ class Config:
         return radarr
 
     def get_settings(self) -> dict[str, Any]:
-        settings = self.config.get("settings", {}) if isinstance(self.config, dict) else {}
+        settings = (
+            self.config.get("settings", {}) if isinstance(self.config, dict) else {}
+        )
         return settings if isinstance(settings, dict) else {}

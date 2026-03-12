@@ -1,6 +1,5 @@
 """Manual search dialog for Sonarr UI."""
 
-
 from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, QStringListModel, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
@@ -26,8 +25,8 @@ class _SearchFilterProxy(QSortFilterProxyModel):
 
     def __init__(self, col_quality=2, col_indexer=3, parent=None):
         super().__init__(parent)
-        self._quality = ''
-        self._indexer = ''
+        self._quality = ""
+        self._indexer = ""
         self._col_quality = col_quality
         self._col_indexer = col_indexer
 
@@ -45,11 +44,11 @@ class _SearchFilterProxy(QSortFilterProxyModel):
         model = self.sourceModel()
         if self._quality:
             idx = model.index(source_row, self._col_quality, source_parent)
-            if (model.data(idx, Qt.DisplayRole) or '') != self._quality:
+            if (model.data(idx, Qt.DisplayRole) or "") != self._quality:
                 return False
         if self._indexer:
             idx = model.index(source_row, self._col_indexer, source_parent)
-            if (model.data(idx, Qt.DisplayRole) or '') != self._indexer:
+            if (model.data(idx, Qt.DisplayRole) or "") != self._indexer:
                 return False
         return True
 
@@ -72,7 +71,7 @@ class ManualSearchDialog(QDialog):
 
     @staticmethod
     def _ui_key(name: str) -> str:
-        return f'ui/sonarr_ui/manual_search/{name}'
+        return f"ui/sonarr_ui/manual_search/{name}"
 
     def __init__(
         self,
@@ -82,7 +81,7 @@ class ManualSearchDialog(QDialog):
         settings: QSettingsValueStore | None = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle(f'Manual Search: {title}')
+        self.setWindowTitle(f"Manual Search: {title}")
         self.setWindowState(Qt.WindowMaximized)
         self.selected_release = None
         self._settings = settings
@@ -92,12 +91,14 @@ class ManualSearchDialog(QDialog):
         # filter row: text filter + quality combo
         filter_row = QHBoxLayout()
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText('Filter results…')
+        self.filter_input.setPlaceholderText("Filter results…")
         self.filter_input.textChanged.connect(self._apply_filters)
         # autocomplete from saved history
         self._filter_history = []
         if settings:
-            self._filter_history = settings.value(self._ui_key('search_filter_history'), []) or []
+            self._filter_history = (
+                settings.value(self._ui_key("search_filter_history"), []) or []
+            )
         self._completer_model = QStringListModel(self._filter_history)
         completer = QCompleter(self._completer_model, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
@@ -105,23 +106,26 @@ class ManualSearchDialog(QDialog):
         self.filter_input.setCompleter(completer)
         filter_row.addWidget(self.filter_input, 1)
 
-        filter_row.addWidget(QLabel('Quality:'))
+        filter_row.addWidget(QLabel("Quality:"))
         self.quality_combo = QComboBox()
-        self.quality_combo.addItem('All', '')
+        self.quality_combo.addItem("All", "")
         # collect unique quality names
-        qualities = sorted({
-            rel.get('quality', {}).get('quality', {}).get('name', '')
-            for rel in releases
-        } - {''})
+        qualities = sorted(
+            {
+                rel.get("quality", {}).get("quality", {}).get("name", "")
+                for rel in releases
+            }
+            - {""}
+        )
         for q in qualities:
             self.quality_combo.addItem(q, q)
         self.quality_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self.quality_combo)
 
-        filter_row.addWidget(QLabel('Indexer:'))
+        filter_row.addWidget(QLabel("Indexer:"))
         self.indexer_combo = QComboBox()
-        self.indexer_combo.addItem('All', '')
-        indexers = sorted({rel.get('indexer', '') for rel in releases} - {''})
+        self.indexer_combo.addItem("All", "")
+        indexers = sorted({rel.get("indexer", "") for rel in releases} - {""})
         for ix in indexers:
             self.indexer_combo.addItem(ix, ix)
         self.indexer_combo.currentIndexChanged.connect(self._apply_filters)
@@ -129,47 +133,48 @@ class ManualSearchDialog(QDialog):
         layout.addLayout(filter_row)
 
         # source model
-        self._columns = ['Title', 'Size (GB)', 'Quality', 'Indexer', 'Age']
+        self._columns = ["Title", "Size (GB)", "Quality", "Indexer", "Age"]
         self.source_model = QStandardItemModel()
         self.source_model.setHorizontalHeaderLabels(self._columns)
 
         # populate
         for rel in releases:
-            title_item = QStandardItem(rel.get('title', ''))
+            title_item = QStandardItem(rel.get("title", ""))
             title_item.setEditable(False)
             title_item.setData(rel, ROLE_RELEASE)
 
-            size = rel.get('size', 0)
+            size = rel.get("size", 0)
             size_gb = size / (1024**3) if size > 0 else 0.0
             size_item = QStandardItem()
             size_item.setEditable(False)
             size_item.setData(round(size_gb, 2), Qt.DisplayRole)
 
-            quality = rel.get('quality', {}).get('quality', {}).get('name', '')
+            quality = rel.get("quality", {}).get("quality", {}).get("name", "")
             quality_item = QStandardItem(quality)
             quality_item.setEditable(False)
 
-            indexer_item = QStandardItem(rel.get('indexer', ''))
+            indexer_item = QStandardItem(rel.get("indexer", ""))
             indexer_item.setEditable(False)
 
-            age_hours = rel.get('ageHours', 0) or 0
+            age_hours = rel.get("ageHours", 0) or 0
             if age_hours:
                 age_days = age_hours / 24
             else:
-                age_days = rel.get('age', 0) or 0
+                age_days = rel.get("age", 0) or 0
                 age_hours = age_days * 24
             if age_hours < 1:
-                age_str = '< 1h'
+                age_str = "< 1h"
             elif age_hours < 24:
-                age_str = f'{int(age_hours)}h'
+                age_str = f"{int(age_hours)}h"
             else:
-                age_str = f'{int(age_days)}d'
+                age_str = f"{int(age_days)}d"
             age_item = QStandardItem(age_str)
             age_item.setEditable(False)
             age_item.setData(age_hours, Qt.UserRole)
 
-            self.source_model.appendRow([title_item, size_item, quality_item,
-                                         indexer_item, age_item])
+            self.source_model.appendRow(
+                [title_item, size_item, quality_item, indexer_item, age_item]
+            )
 
         # proxy for sorting + filtering
         self.proxy = _SearchFilterProxy(self._COL_QUALITY, self._COL_INDEXER)
@@ -185,10 +190,14 @@ class ManualSearchDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setSortingEnabled(True)
-        self.table.sortByColumn(4, Qt.AscendingOrder)  # default sort by age asc (newest first)
+        self.table.sortByColumn(
+            4, Qt.AscendingOrder
+        )  # default sort by age asc (newest first)
         header = self.table.header()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        saved = settings.value(self._ui_key('search_column_widths')) if settings else None
+        saved = (
+            settings.value(self._ui_key("search_column_widths")) if settings else None
+        )
         if saved and len(saved) == len(self._columns):
             for col, w in enumerate(saved):
                 self.table.setColumnWidth(col, int(w))
@@ -207,8 +216,8 @@ class ManualSearchDialog(QDialog):
 
     def _apply_filters(self):
         self.proxy.setFilterFixedString(self.filter_input.text())
-        self.proxy.set_quality(self.quality_combo.currentData() or '')
-        self.proxy.set_indexer(self.indexer_combo.currentData() or '')
+        self.proxy.set_quality(self.quality_combo.currentData() or "")
+        self.proxy.set_indexer(self.indexer_combo.currentData() or "")
 
     def _save_filter_history(self):
         text = self.filter_input.text().strip()
@@ -216,13 +225,15 @@ class ManualSearchDialog(QDialog):
             self._filter_history.append(text)
             # keep last 50
             self._filter_history = self._filter_history[-50:]
-            self._settings.set_value(self._ui_key('search_filter_history'), self._filter_history)
+            self._settings.set_value(
+                self._ui_key("search_filter_history"), self._filter_history
+            )
             self._completer_model.setStringList(self._filter_history)
 
     def _save_column_widths(self):
         if self._settings:
             widths = [self.table.columnWidth(c) for c in range(len(self._columns))]
-            self._settings.set_value(self._ui_key('search_column_widths'), widths)
+            self._settings.set_value(self._ui_key("search_column_widths"), widths)
 
     def _get_selected_release(self) -> dict | None:
         indexes = self.table.selectionModel().selectedRows()

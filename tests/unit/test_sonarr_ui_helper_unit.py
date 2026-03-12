@@ -55,7 +55,9 @@ def probe_cache_paths(tmp_path, monkeypatch):
     return cache_path, lock_path
 
 
-def test_save_probe_cache_merges_existing_when_replace_false(probe_cache_paths, monkeypatch):
+def test_save_probe_cache_merges_existing_when_replace_false(
+    probe_cache_paths, monkeypatch
+):
     cache_path, _ = probe_cache_paths
     cache_path.write_text(json.dumps({"old": {"size_bytes": 1}}), encoding="utf-8")
     monkeypatch.setattr(sui_probe, "_probe_cache", {"new": {"size_bytes": 2}})
@@ -235,7 +237,13 @@ class _APIWithWarnings:
     def get_series(self):
         return [
             {"id": 1, "title": "Bad", "year": 2022, "path": "x", "seasons": []},
-            {"id": 2, "title": "Good", "year": 2023, "path": "y", "seasons": [{"seasonNumber": 1}]},
+            {
+                "id": 2,
+                "title": "Good",
+                "year": 2023,
+                "path": "y",
+                "seasons": [{"seasonNumber": 1}],
+            },
         ]
 
     def get_episode_files(self, series_id):

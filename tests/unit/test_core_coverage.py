@@ -34,8 +34,12 @@ def test_find_ffprobe_uses_windows_candidates(monkeypatch, tmp_path) -> None:
     assert ffprobe.find_ffprobe() == str(candidate)
 
 
-def test_get_app_cache_dir_falls_back_when_creation_fails(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(paths.os, "makedirs", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom")))
+def test_get_app_cache_dir_falls_back_when_creation_fails(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        paths.os, "makedirs", lambda *_a, **_k: (_ for _ in ()).throw(OSError("boom"))
+    )
 
     assert paths.get_app_cache_dir(str(tmp_path)) == str(tmp_path)
 

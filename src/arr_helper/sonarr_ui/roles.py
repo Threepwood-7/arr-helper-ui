@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt
 
-ROLE_NODE_TYPE = Qt.UserRole + 1    # 'series' | 'season' | 'episode'
+ROLE_NODE_TYPE = Qt.UserRole + 1  # 'series' | 'season' | 'episode'
 ROLE_SERIES_ID = Qt.UserRole + 2
 ROLE_SERIES_PATH = Qt.UserRole + 3
 ROLE_SEASON_NUM = Qt.UserRole + 4

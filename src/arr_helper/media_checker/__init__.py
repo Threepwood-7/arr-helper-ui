@@ -3,4 +3,4 @@
 from .checker import MediaQualityChecker
 from .config import Config
 
-__all__ = ['Config', 'MediaQualityChecker']
+__all__ = ["Config", "MediaQualityChecker"]

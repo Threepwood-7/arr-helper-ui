@@ -57,7 +57,9 @@ class _ServiceGroup(QGroupBox):
             "url": str(self.txt_url.text() or "").strip(),
             "api_key": str(self.txt_api_key.text() or "").strip(),
             "http_basic_auth_username": str(self.txt_http_user.text() or "").strip(),
-            "http_basic_auth_password": str(self.txt_http_password.text() or "").strip(),
+            "http_basic_auth_password": str(
+                self.txt_http_password.text() or ""
+            ).strip(),
         }
 
 
@@ -121,7 +123,9 @@ class ArrSetupWizardDialog(QDialog):
         self.txt_lang_codes = QLineEdit(
             ", ".join(settings.get("english_language_codes", ["eng", "en", "english"]))
         )
-        self.txt_highlight = QLineEdit(str(settings.get("highlight_missing_subs", "") or ""))
+        self.txt_highlight = QLineEdit(
+            str(settings.get("highlight_missing_subs", "") or "")
+        )
 
         options_layout.addRow("", self.chk_dry_run)
         options_layout.addRow("", self.chk_interactive)
@@ -132,7 +136,10 @@ class ArrSetupWizardDialog(QDialog):
 
         root.addWidget(options)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         row = QHBoxLayout()
@@ -150,14 +157,20 @@ class ArrSetupWizardDialog(QDialog):
         if radarr["enabled"]:
             enabled.append(("radarr", radarr))
         if not enabled:
-            QMessageBox.warning(self, "Validation", "Enable at least one of Sonarr or Radarr.")
+            QMessageBox.warning(
+                self, "Validation", "Enable at least one of Sonarr or Radarr."
+            )
             return
         for name, service in enabled:
             if not str(service.get("url", "")).strip():
-                QMessageBox.warning(self, "Validation", f"[{name}] URL is required when enabled.")
+                QMessageBox.warning(
+                    self, "Validation", f"[{name}] URL is required when enabled."
+                )
                 return
             if not str(service.get("api_key", "")).strip():
-                QMessageBox.warning(self, "Validation", f"[{name}] API key is required when enabled.")
+                QMessageBox.warning(
+                    self, "Validation", f"[{name}] API key is required when enabled."
+                )
                 return
         self.accept()
 
@@ -188,7 +201,9 @@ class ArrSetupWizardDialog(QDialog):
     def _test_radarr_connection(self) -> None:
         self._test_service_connection("Radarr", self.radarr_group.to_dict())
 
-    def _test_service_connection(self, service_name: str, service: dict[str, Any]) -> None:
+    def _test_service_connection(
+        self, service_name: str, service: dict[str, Any]
+    ) -> None:
         if not bool(service.get("enabled", True)):
             QMessageBox.information(
                 self,
@@ -202,10 +217,14 @@ class ArrSetupWizardDialog(QDialog):
         http_user = str(service.get("http_basic_auth_username", "") or "").strip()
         http_password = str(service.get("http_basic_auth_password", "") or "").strip()
         if not url:
-            QMessageBox.warning(self, "Connection Test", f"{service_name} URL is required.")
+            QMessageBox.warning(
+                self, "Connection Test", f"{service_name} URL is required."
+            )
             return
         if not api_key:
-            QMessageBox.warning(self, "Connection Test", f"{service_name} API key is required.")
+            QMessageBox.warning(
+                self, "Connection Test", f"{service_name} API key is required."
+            )
             return
 
         endpoint = f"{url.rstrip('/')}/api/v3/system/status"
