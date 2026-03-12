@@ -20,7 +20,7 @@ class LoadWorker(QThread):
         super().__init__()
         self.api = api
 
-    def run(self):
+    def run(self):  # noqa: C901 - worker dispatch across API and probe steps
         try:
             self.progress.emit("Fetching series list…")
             try:
