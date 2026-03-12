@@ -2,6 +2,7 @@
 
 import os
 import platform
+from pathlib import Path
 
 from threep_commons.executables import find_first_available_executable
 
@@ -19,44 +20,46 @@ def find_ffprobe() -> str | None:
     return str(found) if found is not None else None
 
 
-def _windows_candidates() -> list[str]:
+def _windows_candidates() -> list[Path]:
     """Generate candidate ffprobe.exe paths for common Windows installs."""
-    candidates = []
+    candidates: list[Path] = []
 
     # Direct / manual installs
-    for base in [
-        r"C:\ffmpeg\bin",
-        r"C:\Program Files\ffmpeg\bin",
-        r"C:\Program Files (x86)\ffmpeg\bin",
-        r"C:\tools\ffmpeg\bin",
-    ]:
-        candidates.append(os.path.join(base, "ffprobe.exe"))
+    for base in (
+        Path(r"C:\ffmpeg\bin"),
+        Path(r"C:\Program Files\ffmpeg\bin"),
+        Path(r"C:\Program Files (x86)\ffmpeg\bin"),
+        Path(r"C:\tools\ffmpeg\bin"),
+    ):
+        candidates.append(base / "ffprobe.exe")
 
     # Chocolatey
-    choco = os.environ.get("CHOCOLATEYINSTALL", r"C:\ProgramData\chocolatey")
-    candidates.append(os.path.join(choco, "bin", "ffprobe.exe"))
+    choco = Path(r"C:\ProgramData\chocolatey")
+    env_choco = Path(str(os.environ.get("CHOCOLATEYINSTALL", str(choco))))
+    candidates.append(env_choco / "bin" / "ffprobe.exe")
 
     # Scoop
-    userprofile = os.environ.get("USERPROFILE", "")
-    if userprofile:
-        candidates.append(os.path.join(userprofile, "scoop", "shims", "ffprobe.exe"))
+    userprofile_text = os.environ.get("USERPROFILE", "")
+    userprofile = Path(userprofile_text) if userprofile_text else None
+    if userprofile is not None:
+        candidates.append(userprofile / "scoop" / "shims" / "ffprobe.exe")
 
     # WinGet
-    localappdata = os.environ.get("LOCALAPPDATA", "")
-    if localappdata:
+    localappdata_text = os.environ.get("LOCALAPPDATA", "")
+    if localappdata_text:
         candidates.append(
-            os.path.join(localappdata, "Microsoft", "WinGet", "Links", "ffprobe.exe")
+            Path(localappdata_text) / "Microsoft" / "WinGet" / "Links" / "ffprobe.exe"
         )
 
     # Scan C:\ and %USERPROFILE% for ffmpeg*/bin/ffprobe.exe (versioned extracts)
-    for root_dir in ["C:\\", userprofile]:
-        if root_dir and os.path.isdir(root_dir):
+    for root_dir in (Path(r"C:\\"), userprofile):
+        if root_dir is not None and root_dir.is_dir():
             try:
-                for entry in os.scandir(root_dir):
+                for entry in root_dir.iterdir():
                     if entry.is_dir() and entry.name.lower().startswith("ffmpeg"):
-                        p = os.path.join(entry.path, "bin", "ffprobe.exe")
-                        if p not in candidates:
-                            candidates.append(p)
+                        candidate = entry / "bin" / "ffprobe.exe"
+                        if candidate not in candidates:
+                            candidates.append(candidate)
             except OSError:
                 pass
 

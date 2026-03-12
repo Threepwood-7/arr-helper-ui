@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from typing import Any, cast
 
 from rich import box
 from rich.panel import Panel
@@ -13,6 +12,8 @@ from ..constants import APP_IDENTITY
 from ..core.ffprobe import find_ffprobe
 from .checker import MediaQualityChecker
 from .config import Config
+
+HttpAuth = tuple[str, str]
 
 
 def _print_config_errors_and_exit(config: Config, errors: list[str]) -> None:
@@ -42,7 +43,7 @@ def main() -> int:
     interactive = bool(settings.get("interactive", False))
     require_audio = bool(settings.get("require_english_audio", True))
     require_subs = bool(settings.get("require_english_subs", True))
-    english_codes = settings.get("english_language_codes", ["eng", "en", "english"])
+    english_codes_raw = settings.get("english_language_codes", ["eng", "en", "english"])
 
     sonarr_config = config.get_sonarr_config()
     radarr_config = config.get_radarr_config()
@@ -51,10 +52,16 @@ def main() -> int:
         print("Error: Both Sonarr and Radarr are disabled in config.")
         return 1
 
-    def _http_auth(cfg: dict[str, object] | None):
+    def _http_auth(cfg: dict[str, object] | None) -> HttpAuth | None:
         user = str(cfg.get("http_basic_auth_username", "") if cfg else "")
         password = str(cfg.get("http_basic_auth_password", "") if cfg else "")
         return (user, password) if user else None
+
+    english_codes_list = (
+        [str(code) for code in english_codes_raw]
+        if isinstance(english_codes_raw, list)
+        else ["eng", "en", "english"]
+    )
 
     checker = MediaQualityChecker(
         sonarr_url=str(sonarr_config.get("url", "") if sonarr_config else ""),
@@ -63,13 +70,11 @@ def main() -> int:
         radarr_api=str(radarr_config.get("api_key", "") if radarr_config else ""),
         require_audio=require_audio,
         require_subs=require_subs,
-        english_codes=list(english_codes)
-        if isinstance(english_codes, list)
-        else ["eng", "en", "english"],
+        english_codes=english_codes_list,
         interactive=interactive,
         config=config,
-        sonarr_http_auth=cast("Any", _http_auth(sonarr_config)),
-        radarr_http_auth=cast("Any", _http_auth(radarr_config)),
+        sonarr_http_auth=_http_auth(sonarr_config),
+        radarr_http_auth=_http_auth(radarr_config),
         ffprobe_path=ffprobe_path,
     )
 
