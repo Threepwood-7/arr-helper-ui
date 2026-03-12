@@ -510,7 +510,7 @@ class MainWindow(QMainWindow):
             self.tree.resizeColumnToContents(col)
         self.status_label.setText("Columns fitted to contents")
 
-    def _on_data_loaded(self, series_list: list):  # noqa: C901 - UI refresh fan-out
+    def _on_data_loaded(self, series_list: list):
         self.progress_bar.hide()
         self.model.removeRows(0, self.model.rowCount())
 
@@ -915,9 +915,7 @@ class MainWindow(QMainWindow):
                 f"Monitoring: {label}...", _action, _on_success, "Failed to monitor"
             )
 
-    def _ctx_unmonitor(  # noqa: C901 - context action branches by node type
-        self, item: QStandardItem, node_type: str
-    ):
+    def _ctx_unmonitor(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
         label = item.text()
 
@@ -1135,9 +1133,7 @@ class MainWindow(QMainWindow):
             "Manual search failed",
         )
 
-    def _ctx_delete_from_disk(  # noqa: C901 - destructive context action workflow
-        self, item: QStandardItem, node_type: str
-    ):
+    def _ctx_delete_from_disk(self, item: QStandardItem, node_type: str):
         label = item.text()
         reply = QMessageBox.question(
             self,
@@ -1361,9 +1357,7 @@ class MainWindow(QMainWindow):
             "Failed to fetch series",
         )
 
-    def _ctx_unmonitor_delete(  # noqa: C901 - combined unmonitor/delete flow
-        self, item: QStandardItem, node_type: str
-    ):
+    def _ctx_unmonitor_delete(self, item: QStandardItem, node_type: str):
         series_id = item.data(ROLE_SERIES_ID)
         label = item.text()
         reply = QMessageBox.question(

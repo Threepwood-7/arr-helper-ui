@@ -159,7 +159,7 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def probe_file(file_path: str) -> dict:  # noqa: C901 - ffprobe metadata normalization
+def probe_file(file_path: str) -> dict:
     """Return dict with codecs, resolution, bitrates, HDR, languages, size."""
     info: dict = {
         "video_codec": "",

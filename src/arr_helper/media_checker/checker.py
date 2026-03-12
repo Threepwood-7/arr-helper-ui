@@ -287,7 +287,7 @@ class MediaQualityChecker:
         )
         return releases or []
 
-    def display_releases_and_select(  # noqa: C901 - interactive release selection flow
+    def display_releases_and_select(
         self, releases: list[dict], title: str, file_path: str
     ) -> dict | None:
         """Display releases in a table and let user select one"""
@@ -484,7 +484,7 @@ class MediaQualityChecker:
         if missing_search_message:
             print(f"     {missing_search_message}")
 
-    def process_sonarr(self, dry_run: bool = False):  # noqa: C901 - Sonarr workflow orchestration
+    def process_sonarr(self, dry_run: bool = False):
         """Process all Sonarr series and check episode files"""
         if self.interactive:
             self.console.print(
@@ -665,7 +665,7 @@ class MediaQualityChecker:
                     else:
                         print(f"  OK {Path(file_path).name}")
 
-    def process_radarr(self, dry_run: bool = False):  # noqa: C901 - Radarr workflow orchestration
+    def process_radarr(self, dry_run: bool = False):
         """Process all Radarr movies and check movie files"""
         if self.interactive:
             self.console.print(
