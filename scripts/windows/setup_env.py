@@ -14,17 +14,13 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     pythonw_exe = repo_root / ".venv" / "Scripts" / "pythonw.exe"
 
-    if pythonw_exe.exists():
-        print(f"Environment already ready: {pythonw_exe}")
-        return 0
-
     uv_exe = shutil.which("uv")
     if uv_exe is None:
         print("ERROR: uv executable not found in PATH.", file=sys.stderr)
         print("Install uv and retry.", file=sys.stderr)
         return 1
 
-    print("Creating project environment with: uv sync --locked")
+    print("Synchronizing project environment with: uv sync --locked")
     rc = run([uv_exe, "sync", "--locked"], repo_root)
     if rc != 0:
         print("Locked sync failed; retrying with: uv sync", file=sys.stderr)

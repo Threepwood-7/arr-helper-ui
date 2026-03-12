@@ -30,6 +30,7 @@ ROOT_REQUIRED = (
     ".gitattributes",
     ".pre-commit-config.yaml",
     "pyproject.toml",
+    "uv.lock",
     "README.md",
 )
 
