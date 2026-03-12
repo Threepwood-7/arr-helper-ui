@@ -1,13 +1,7 @@
 """Manual search dialog for Sonarr UI."""
 
 
-from PySide6.QtCore import (
-    QModelIndex,
-    QSettings,
-    QSortFilterProxyModel,
-    QStringListModel,
-    Qt,
-)
+from PySide6.QtCore import QModelIndex, QSortFilterProxyModel, QStringListModel, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +16,7 @@ from PySide6.QtWidgets import (
     QTreeView,
     QVBoxLayout,
 )
+from threep_commons.settings import QSettingsValueStore
 
 from ..roles import ROLE_RELEASE
 
@@ -79,7 +74,13 @@ class ManualSearchDialog(QDialog):
     def _ui_key(name: str) -> str:
         return f'ui/sonarr_ui/manual_search/{name}'
 
-    def __init__(self, parent, title: str, releases: list[dict], settings: QSettings = None):
+    def __init__(
+        self,
+        parent,
+        title: str,
+        releases: list[dict],
+        settings: QSettingsValueStore | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle(f'Manual Search: {title}')
         self.setWindowState(Qt.WindowMaximized)
@@ -215,13 +216,13 @@ class ManualSearchDialog(QDialog):
             self._filter_history.append(text)
             # keep last 50
             self._filter_history = self._filter_history[-50:]
-            self._settings.setValue(self._ui_key('search_filter_history'), self._filter_history)
+            self._settings.set_value(self._ui_key('search_filter_history'), self._filter_history)
             self._completer_model.setStringList(self._filter_history)
 
     def _save_column_widths(self):
         if self._settings:
             widths = [self.table.columnWidth(c) for c in range(len(self._columns))]
-            self._settings.setValue(self._ui_key('search_column_widths'), widths)
+            self._settings.set_value(self._ui_key('search_column_widths'), widths)
 
     def _get_selected_release(self) -> dict | None:
         indexes = self.table.selectionModel().selectedRows()

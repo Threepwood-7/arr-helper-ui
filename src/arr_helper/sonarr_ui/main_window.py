@@ -261,7 +261,7 @@ class MainWindow(QMainWindow):
             self,
             'Reset View',
             'Reset all saved UI view settings to defaults?\n'
-            'This clears saved column widths, splitter positions, and other QSettings state.',
+            'This clears saved column widths, splitter positions, and other stored view state.',
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

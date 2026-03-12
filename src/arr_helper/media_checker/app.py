@@ -19,7 +19,7 @@ def _print_config_errors_and_exit(config: Config, errors: list[str]) -> None:
     print("Configuration validation failed:")
     for err in errors:
         print(f"  - {err}")
-    print(f"\nOpen and edit QSettings INI: {config.config_path}")
+    print(f"\nOpen and edit settings INI: {config.config_path}")
     print("Then run Sonarr UI setup wizard once: python -m arr_helper")
     sys.exit(1)
 

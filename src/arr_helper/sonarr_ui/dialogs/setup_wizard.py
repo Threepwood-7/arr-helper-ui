@@ -70,7 +70,7 @@ class ArrSetupWizardDialog(QDialog):
         root = QVBoxLayout(self)
         root.addWidget(
             QLabel(
-                "Set Sonarr/Radarr connection settings. Values are stored in QSettings INI."
+                "Set Sonarr/Radarr connection settings. Values are stored in the shared settings INI."
             )
         )
 

@@ -28,7 +28,7 @@ def _show_validation_failure_and_exit(errors: list[str], config_loader: Config) 
     print("Configuration validation failed:")
     if details:
         print(details)
-    print(f"\nOpen and edit QSettings INI: {config_loader.config_path}")
+    print(f"\nOpen and edit settings INI: {config_loader.config_path}")
     sys.exit(1)
 
 

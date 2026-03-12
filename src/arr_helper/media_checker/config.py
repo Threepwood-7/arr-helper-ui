@@ -202,7 +202,7 @@ def _settings_file_path(settings: QSettingsValueStore) -> str:
 
 
 class Config:
-    """Load and manage configuration from QSettings."""
+    """Load and manage configuration from the shared settings store."""
 
     def __init__(self) -> None:
         self._settings = _new_config_settings()
@@ -292,7 +292,7 @@ class Config:
         return (
             "Configuration validation failed:\n"
             f"{details}\n\n"
-            f"Open and edit QSettings INI file: {self.config_path}"
+            f"Open and edit settings INI file: {self.config_path}"
         )
 
     def load_user_cache(self) -> dict[str, Any]:
