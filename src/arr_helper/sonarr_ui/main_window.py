@@ -79,16 +79,8 @@ logger = logging.getLogger(__name__)
 class MainWindow(QMainWindow):
     """Present Sonarr series data and batch actions in a tree-driven UI."""
 
-    def __init__(
-        self,
-        api: SonarrAPI,
-        loader_api: SonarrAPI | None = None,
-        settings: ConfigMap | None = None,
-    ) -> None:
-        super().__init__()
-        self.api = api
-        self.loader_api = loader_api or api
-        self.cfg: ConfigMap = settings or {}
+    def _configure_window(self) -> None:
+        """Apply top-level window settings and initialize preference stores."""
         self.preferences_store = QSettingsValueStore.from_identity(APP_IDENTITY)
         self._settings = self.preferences_store
         self._ui_settings = QSettingsValueStore(
@@ -100,15 +92,8 @@ class MainWindow(QMainWindow):
         self._last_worker_error = ""
         self._worker_warning_count = 0
 
-        # ── Menu bar ──────────────────────────────────────────
-        self._build_menu_bar()
-
-        # central widget
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(4, 4, 4, 4)
-
-        # toolbar (with mnemonics via &)
+    def _build_toolbar(self, layout: QVBoxLayout) -> None:
+        """Build the primary toolbar above the series tree."""
         toolbar = QHBoxLayout()
         btn_expand_all = QPushButton("Expand &All")
         _ = btn_expand_all.clicked.connect(self._expand_all)
@@ -135,6 +120,8 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(btn_refresh)
         layout.addLayout(toolbar)
 
+    def _build_tree_area(self, layout: QVBoxLayout) -> None:
+        """Create the tree view and its backing model."""
         self.tree = QTreeView()
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
@@ -160,33 +147,33 @@ class MainWindow(QMainWindow):
         ]
         self.model.setHorizontalHeaderLabels(self._columns)
         self.tree.setModel(self.model)
-
         layout.addWidget(self.tree)
-        self.setCentralWidget(central)
 
-        # status bar with progress
-        self.status_label = QLabel("Loading…")
+    def _build_status_bar(self) -> None:
+        """Create the window status bar and progress indicator."""
+        self.status_label = QLabel("Loading...")
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)  # indeterminate
+        self.progress_bar.setRange(0, 0)
         self.progress_bar.setMaximumWidth(200)
-        sb = QStatusBar()
-        sb.addWidget(self.status_label, 1)
-        sb.addPermanentWidget(self.progress_bar)
-        self.setStatusBar(sb)
+        status_bar = QStatusBar()
+        status_bar.addWidget(self.status_label, 1)
+        status_bar.addPermanentWidget(self.progress_bar)
+        self.setStatusBar(status_bar)
 
-        # keyboard: Delete key
+    def _configure_shortcuts(self) -> None:
+        """Register keyboard shortcuts for the tree view."""
         del_shortcut = QShortcut(QKeySequence(_KEY_DELETE), self.tree)
         _ = del_shortcut.activated.connect(self._on_delete)
 
-        # keyboard: Enter/Return to activate
         enter_shortcut = QShortcut(QKeySequence(_KEY_RETURN), self.tree)
         _ = enter_shortcut.activated.connect(self._on_enter)
 
-        # cache quality profiles for name lookup
-        self._quality_profiles: list[JsonDict] = []
-        self._qp_map: dict[int, str] = {}
+    def _load_quality_profiles(self) -> None:
+        """Cache Sonarr quality profiles for quick label lookup."""
+        self._quality_profiles = []
+        self._qp_map = {}
         try:
-            self._quality_profiles = api.get_quality_profiles()
+            self._quality_profiles = self.api.get_quality_profiles()
             self._qp_map = {
                 profile_id: profile_name
                 for profile in self._quality_profiles
@@ -195,6 +182,35 @@ class MainWindow(QMainWindow):
             }
         except Exception:
             logger.debug("Failed to cache Sonarr quality profiles", exc_info=True)
+
+    def _build_main_layout(self) -> None:
+        """Assemble the central widget layout for the main window."""
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self._build_toolbar(layout)
+        self._build_tree_area(layout)
+        self.setCentralWidget(central)
+
+    def __init__(
+        self,
+        api: SonarrAPI,
+        loader_api: SonarrAPI | None = None,
+        settings: ConfigMap | None = None,
+    ) -> None:
+        super().__init__()
+        self.api = api
+        self.loader_api = loader_api or api
+        self.cfg: ConfigMap = settings or {}
+        self._configure_window()
+
+        # ── Menu bar ──────────────────────────────────────────
+        self._build_menu_bar()
+
+        self._build_main_layout()
+        self._build_status_bar()
+        self._configure_shortcuts()
+        self._load_quality_profiles()
 
         # start loading
         self.worker: LoadWorker | None = None

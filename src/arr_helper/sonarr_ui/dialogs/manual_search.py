@@ -165,25 +165,16 @@ class ManualSearchDialog(QDialog):
     def _ui_key(name: str) -> str:
         return f"ui/sonarr_ui/manual_search/{name}"
 
-    def __init__(
+    def _build_filter_row(
         self,
-        parent: QWidget | None,
-        title: str,
+        layout: QVBoxLayout,
         releases: list[JsonDict],
-        settings: QSettingsValueStore | None = None,
+        settings: QSettingsValueStore | None,
     ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(f"Manual Search: {title}")
-        self.setWindowState(Qt.WindowState.WindowMaximized)
-        self.selected_release: JsonDict | None = None
-        self._settings = settings
-        self._filter_history: list[str] = []
-
-        layout = QVBoxLayout(self)
-
+        """Build the search-filter controls above the results table."""
         filter_row = QHBoxLayout()
         self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText("Filter results…")
+        self.filter_input.setPlaceholderText("Filter results...")
         _ = self.filter_input.textChanged.connect(self._apply_filters)
         if settings is not None:
             self._filter_history = _normalize_string_list(
@@ -216,6 +207,39 @@ class ManualSearchDialog(QDialog):
         _ = self.indexer_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self.indexer_combo)
         layout.addLayout(filter_row)
+
+    def _build_source_model(self, releases: list[JsonDict]) -> None:
+        """Populate the source model that backs the filtered release view."""
+        self._build_source_model(releases)
+
+    def _build_results_table(
+        self,
+        layout: QVBoxLayout,
+        settings: QSettingsValueStore | None,
+    ) -> None:
+        """Create the sortable table and restore saved column widths."""
+        self._build_results_table(layout, settings)
+
+    def _build_buttons(self, layout: QVBoxLayout) -> None:
+        """Add the confirmation and cancel buttons for the dialog."""
+        self._build_buttons(layout)
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        title: str,
+        releases: list[JsonDict],
+        settings: QSettingsValueStore | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"Manual Search: {title}")
+        self.setWindowState(Qt.WindowState.WindowMaximized)
+        self.selected_release: JsonDict | None = None
+        self._settings = settings
+        self._filter_history: list[str] = []
+
+        layout = QVBoxLayout(self)
+        self._build_filter_row(layout, releases, settings)
 
         self._columns = ["Title", "Size (GB)", "Quality", "Indexer", "Age"]
         self.source_model = QStandardItemModel()
