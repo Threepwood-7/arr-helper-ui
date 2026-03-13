@@ -304,31 +304,54 @@ class MediaQualityChecker:
         )
         return releases if isinstance(releases, list) else []
 
+    @staticmethod
+    def _release_quality_name(release: ConfigMap) -> str:
+        quality_obj = release.get("quality", {})
+        quality = (
+            cast("ConfigMap", quality_obj) if isinstance(quality_obj, dict) else {}
+        )
+        nested_obj = quality.get("quality", {})
+        nested = cast("ConfigMap", nested_obj) if isinstance(nested_obj, dict) else {}
+        return str(nested.get("name", "Unknown"))
+
+    @staticmethod
+    def _release_quality_score(release: ConfigMap) -> int:
+        quality_obj = release.get("quality", {})
+        quality = (
+            cast("ConfigMap", quality_obj) if isinstance(quality_obj, dict) else {}
+        )
+        nested_obj = quality.get("quality", {})
+        nested = cast("ConfigMap", nested_obj) if isinstance(nested_obj, dict) else {}
+        quality_id = nested.get("id", 0)
+        return quality_id if isinstance(quality_id, int) else 0
+
+    @staticmethod
+    def _release_size(release: ConfigMap) -> int:
+        size_obj = release.get("size", 0)
+        return size_obj if isinstance(size_obj, int) else 0
+
     def display_releases_and_select(
-        self, releases: list[dict], title: str, file_path: str
-    ) -> dict | None:
+        self,
+        releases: ConfigList,
+        title: str,
+        file_path: str,
+    ) -> ConfigMap | None:
         """Display releases in a table and let user select one"""
         if not releases:
             self.console.print("[yellow]No alternative releases found[/yellow]")
             return None
 
         # Sort releases by quality profile match (preferred first) then size descending
-        def sort_key(release):
-            # Get quality score - higher is better
-            quality = release.get("quality", {}).get("quality", {})
-            quality_score = quality.get("id", 0)
-
-            # Get size - larger is better for our sort
-            size = release.get("size", 0)
-
-            # Return tuple - sort by quality score desc, then size desc
-            return (-quality_score, -size)
+        def sort_key(release: ConfigMap) -> tuple[int, int]:
+            return (-self._release_quality_score(release), -self._release_size(release))
 
         releases = sorted(releases, key=sort_key)
 
         # Calculate dynamic width for title column
         max_title_len = (
-            max(len(r.get("title", "")) for r in releases) if releases else 80
+            max(len(str(release.get("title", ""))) for release in releases)
+            if releases
+            else 80
         )
         # Limit to 165 chars max, but use actual max + 3 if shorter
         title_width = min(165, max_title_len + 3)
@@ -353,9 +376,9 @@ class MediaQualityChecker:
             # Apply filter if search term exists
             if search_term:
                 filtered_releases = [
-                    r
-                    for r in releases
-                    if search_term.lower() in r.get("title", "").lower()
+                    release
+                    for release in releases
+                    if search_term.lower() in str(release.get("title", "")).lower()
                 ]
             else:
                 filtered_releases = releases
@@ -370,17 +393,15 @@ class MediaQualityChecker:
                 continue
 
             for idx, release in enumerate(filtered_releases, 1):
-                title_text = release.get("title", "Unknown")
+                title_text = str(release.get("title", "Unknown"))
                 # Truncate only if longer than calculated width
                 if len(title_text) > title_width:
                     title_text = title_text[:title_width]
 
-                size = release.get("size", 0)
+                size = self._release_size(release)
                 size_gb = f"{size / (1024**3):.2f} GB" if size > 0 else "Unknown"
-                quality = (
-                    release.get("quality", {}).get("quality", {}).get("name", "Unknown")
-                )
-                indexer = release.get("indexer", "Unknown")[:6]  # Truncate to 6 chars
+                quality = self._release_quality_name(release)
+                indexer = str(release.get("indexer", "Unknown"))[:6]
 
                 table.add_row(str(idx), title_text, size_gb, quality, indexer)
 
@@ -434,7 +455,11 @@ class MediaQualityChecker:
                 return None
 
     def download_release(
-        self, url: str, api_key: str, release: dict, is_sonarr: bool = True
+        self,
+        url: str,
+        api_key: str,
+        release: ConfigMap,
+        is_sonarr: bool = True,
     ) -> bool:
         """Download a specific release"""
         try:
@@ -445,7 +470,7 @@ class MediaQualityChecker:
                 self.console.print("[red]Invalid release data[/red]")
                 return False
 
-            data = {"guid": guid, "indexerId": indexer_id}
+            data: ConfigMap = {"guid": guid, "indexerId": indexer_id}
 
             result = self._make_request(
                 url,
@@ -474,7 +499,7 @@ class MediaQualityChecker:
         api_key: str,
         file_endpoint: str,
         auth: tuple[str, str] | None,
-        search_payload: dict | None,
+        search_payload: ConfigMap | None,
         trigger_message: str,
         missing_search_message: str | None = None,
     ) -> None:
