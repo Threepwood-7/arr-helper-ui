@@ -26,6 +26,21 @@ RequestResult = ConfigMap | ConfigList
 
 
 class MediaQualityChecker:
+    @staticmethod
+    def _payload_str(payload: ConfigMap, key: str, default: str = "") -> str:
+        value = payload.get(key, default)
+        return value if isinstance(value, str) else default
+
+    @staticmethod
+    def _payload_int(payload: ConfigMap, key: str) -> int | None:
+        value = payload.get(key)
+        return value if isinstance(value, int) else None
+
+    @staticmethod
+    def _payload_map(payload: ConfigMap, key: str) -> ConfigMap:
+        nested = payload.get(key, {})
+        return cast("ConfigMap", nested) if isinstance(nested, dict) else {}
+
     def __init__(
         self,
         sonarr_url: str,
@@ -83,12 +98,12 @@ class MediaQualityChecker:
     def _normalize_cache_map(self, raw_value: object) -> dict[str, str]:
         normalized: dict[str, str] = {}
         if isinstance(raw_value, dict):
-            for path, signature in raw_value.items():
+            for path, signature in cast("dict[object, object]", raw_value).items():
                 if isinstance(path, str) and isinstance(signature, str) and signature:
                     normalized[path] = signature
         elif isinstance(raw_value, list):
             # Backward compatibility with old list[str] format.
-            for path in raw_value:
+            for path in cast("list[object]", raw_value):
                 if isinstance(path, str):
                     signature = self._file_signature(path)
                     if signature:
@@ -542,7 +557,7 @@ class MediaQualityChecker:
             "series",
             auth=self.sonarr_http_auth,
         )
-        if not series_list:
+        if not isinstance(series_list, list) or not series_list:
             msg = "Failed to fetch series from Sonarr"
             if self.interactive:
                 self.console.print(f"[red]{msg}[/red]")
@@ -556,9 +571,11 @@ class MediaQualityChecker:
             print(f"Found {len(series_list)} series")
 
         for series in series_list:
-            series_id = series["id"]
-            series_title = series["title"]
-            quality_profile_id = series.get("qualityProfileId")
+            series_id = self._payload_int(series, "id")
+            series_title = self._payload_str(series, "title", "?")
+            quality_profile_id = self._payload_int(series, "qualityProfileId")
+            if series_id is None:
+                continue
 
             # Get episode files for this series
             episode_files = self._make_request(
@@ -568,7 +585,7 @@ class MediaQualityChecker:
                 auth=self.sonarr_http_auth,
             )
 
-            if not episode_files:
+            if not isinstance(episode_files, list) or not episode_files:
                 continue
 
             if self.interactive:
@@ -579,8 +596,8 @@ class MediaQualityChecker:
                 print(f"\nChecking series: {series_title} ({len(episode_files)} files)")
 
             for ep_file in episode_files:
-                file_path = ep_file.get("path")
-                file_id = ep_file.get("id")
+                file_path = self._payload_str(ep_file, "path")
+                file_id = self._payload_int(ep_file, "id")
 
                 if not file_path or not file_id:
                     continue
@@ -723,7 +740,7 @@ class MediaQualityChecker:
             "movie",
             auth=self.radarr_http_auth,
         )
-        if not movies:
+        if not isinstance(movies, list) or not movies:
             msg = "Failed to fetch movies from Radarr"
             if self.interactive:
                 self.console.print(f"[red]{msg}[/red]")
@@ -740,14 +757,14 @@ class MediaQualityChecker:
             if not movie.get("hasFile"):
                 continue
 
-            movie_id = movie["id"]
-            movie_title = movie["title"]
-            quality_profile_id = movie.get("qualityProfileId")
-            movie_file = movie.get("movieFile", {})
-            file_path = movie_file.get("path")
-            file_id = movie_file.get("id")
+            movie_id = self._payload_int(movie, "id")
+            movie_title = self._payload_str(movie, "title", "?")
+            quality_profile_id = self._payload_int(movie, "qualityProfileId")
+            movie_file = self._payload_map(movie, "movieFile")
+            file_path = self._payload_str(movie_file, "path")
+            file_id = self._payload_int(movie_file, "id")
 
-            if not file_path or not file_id:
+            if movie_id is None or not file_path or not file_id:
                 continue
 
             # Check if file is already in good files cache

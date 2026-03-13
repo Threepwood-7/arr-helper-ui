@@ -7,9 +7,10 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtCore import QModelIndex, QPoint, Qt
 from PySide6.QtGui import (
     QAction,
+    QCloseEvent,
     QColor,
     QKeySequence,
     QShortcut,
@@ -69,6 +70,7 @@ _KEY_RETURN = Qt.Key.Key_Return
 _WAIT_CURSOR = Qt.CursorShape.WaitCursor
 _MSG_YES = QMessageBox.StandardButton.Yes
 _MSG_NO = QMessageBox.StandardButton.No
+_DIALOG_ACCEPTED = QDialog.DialogCode.Accepted
 
 
 class MainWindow(QMainWindow):
@@ -181,9 +183,10 @@ class MainWindow(QMainWindow):
         try:
             self._quality_profiles = api.get_quality_profiles()
             self._qp_map = {
-                int(profile["id"]): str(profile["name"])
+                profile_id: profile_name
                 for profile in self._quality_profiles
-                if isinstance(profile.get("id"), int) and "name" in profile
+                if isinstance((profile_id := profile.get("id")), int)
+                and isinstance((profile_name := profile.get("name")), str)
             }
         except Exception:
             pass
@@ -212,6 +215,51 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _item_role_bool(item: QStandardItem, role: int) -> bool:
         return bool(item.data(role))
+
+    @staticmethod
+    def _as_json_dict(value: object) -> JsonDict | None:
+        if not isinstance(value, dict):
+            return None
+        return dict(cast("JsonDict", value))
+
+    @staticmethod
+    def _as_json_list(value: object) -> list[JsonDict]:
+        if not isinstance(value, list):
+            return []
+        payloads: list[JsonDict] = []
+        entries = cast("list[object]", value)
+        for entry in entries:
+            payload = MainWindow._as_json_dict(entry)
+            if payload is not None:
+                payloads.append(payload)
+        return payloads
+
+    @staticmethod
+    def _item_role_payloads(item: QStandardItem, role: int) -> list[JsonDict]:
+        return MainWindow._as_json_list(item.data(role))
+
+    @staticmethod
+    def _result_int(result: object, key: str) -> int:
+        result_map = MainWindow._as_json_dict(result)
+        if result_map is None:
+            return 0
+        value = result_map.get(key, 0)
+        return value if isinstance(value, int) else 0
+
+    @staticmethod
+    def _result_bool(result: object, key: str) -> bool:
+        result_map = MainWindow._as_json_dict(result)
+        if result_map is None:
+            return False
+        return bool(result_map.get(key, False))
+
+    @staticmethod
+    def _result_str(result: object, key: str) -> str:
+        result_map = MainWindow._as_json_dict(result)
+        if result_map is None:
+            return ""
+        value = result_map.get(key, "")
+        return value if isinstance(value, str) else ""
 
     def _build_menu_bar(self) -> None:
         mb = self.menuBar()
@@ -439,15 +487,18 @@ class MainWindow(QMainWindow):
         self._last_worker_error = ""
         self._worker_warning_count = 0
         worker = LoadWorker(self.loader_api)
-        _ = worker.progress.connect(
-            lambda text, w=worker: self._on_worker_progress(w, str(text))
-        )
-        _ = worker.series_ready.connect(
-            lambda data, w=worker: self._on_worker_series_ready(
+
+        def _handle_progress(text: object, w: LoadWorker = worker) -> None:
+            self._on_worker_progress(w, str(text))
+
+        def _handle_series_ready(data: object, w: LoadWorker = worker) -> None:
+            self._on_worker_series_ready(
                 w,
                 cast("list[LoadedSeriesEntry]", data),
             )
-        )
+
+        _ = worker.progress.connect(_handle_progress)
+        _ = worker.series_ready.connect(_handle_series_ready)
         self.worker = worker
         worker.start()
 
@@ -533,8 +584,11 @@ class MainWindow(QMainWindow):
             return
         # expand via the language codes array
         raw_codes = self.cfg.get("english_language_codes", [hl])
+        code_values = (
+            cast("list[object]", raw_codes) if isinstance(raw_codes, list) else []
+        )
         codes = (
-            [code.lower() for code in raw_codes if isinstance(code, str)]
+            [str(code).lower() for code in code_values if isinstance(code, str)]
             if isinstance(raw_codes, list)
             else [hl]
         )
@@ -725,7 +779,7 @@ class MainWindow(QMainWindow):
 
         # resize columns
         header = self.tree.header()
-        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         saved = self._settings.value(self._ui_key("column_widths"))
         if saved and len(saved) == len(self._columns):
             for col, w in enumerate(saved):
@@ -812,7 +866,7 @@ class MainWindow(QMainWindow):
 
     # ── context menu ───────────────────────────────────────────
 
-    def _on_context_menu(self, pos):
+    def _on_context_menu(self, pos: QPoint) -> None:
         if not self._ensure_action_idle():
             return
         index = self.tree.indexAt(pos)
@@ -824,7 +878,7 @@ class MainWindow(QMainWindow):
         if not item:
             return
 
-        node_type = item.data(ROLE_NODE_TYPE)
+        node_type = self._item_role_str(item, ROLE_NODE_TYPE)
         menu = QMenu(self)
 
         act_monitor = menu.addAction("Monitor")
@@ -857,7 +911,7 @@ class MainWindow(QMainWindow):
         elif action == act_unmonitor_delete:
             self._ctx_unmonitor_delete(item, node_type)
 
-    def _update_mon_column(self, item: QStandardItem, monitored: bool):
+    def _update_mon_column(self, item: QStandardItem, monitored: bool) -> None:
         """Update the 'Mon' column (col 2) for the row containing item."""
         parent = item.parent() or self.model.invisibleRootItem()
         mon_item = parent.child(item.row(), 2)
@@ -865,20 +919,14 @@ class MainWindow(QMainWindow):
             mon_item.setText("Y" if monitored else "N")
 
     @staticmethod
-    def _clone_episode_payloads(raw_payloads: object) -> list[dict]:
-        payloads: list[dict] = []
-        for ep in raw_payloads or []:
-            if isinstance(ep, dict):
-                payloads.append(dict(ep))
-        return payloads
+    def _clone_episode_payloads(raw_payloads: object) -> list[JsonDict]:
+        return MainWindow._as_json_list(raw_payloads)
 
-    def _collect_episode_payloads(self, parent_item: QStandardItem) -> list[dict]:
-        payloads: list[dict] = []
+    def _collect_episode_payloads(self, parent_item: QStandardItem) -> list[JsonDict]:
+        payloads: list[JsonDict] = []
         for row in range(parent_item.rowCount()):
             ep_item = parent_item.child(row, 0)
-            payloads.extend(
-                self._clone_episode_payloads(ep_item.data(ROLE_EPISODE_DATA))
-            )
+            payloads.extend(self._item_role_payloads(ep_item, ROLE_EPISODE_DATA))
         return payloads
 
     @staticmethod
@@ -912,8 +960,11 @@ class MainWindow(QMainWindow):
         return True, ""
 
     def _ctx_monitor(self, item: QStandardItem, node_type: str):
-        series_id = item.data(ROLE_SERIES_ID)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
         label = item.text()
+        if series_id is None:
+            self.status_label.setText("No series ID available")
+            return
 
         if node_type == "series":
 
@@ -923,7 +974,7 @@ class MainWindow(QMainWindow):
                 self.api.update_series(series_data)
                 return None
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self._update_mon_column(item, True)
                 self.status_label.setText(f"Monitored: {label}")
 
@@ -933,18 +984,27 @@ class MainWindow(QMainWindow):
             return
 
         if node_type == "season":
-            season_num = item.data(ROLE_SEASON_NUM)
+            season_num = self._item_role_int(item, ROLE_SEASON_NUM)
+            if season_num is None:
+                self.status_label.setText("No season number available")
+                return
 
             def _action():
                 series_data = self.api.get_series_by_id(series_id)
-                for s in series_data.get("seasons", []):
+                seasons_obj = series_data.get("seasons", [])
+                seasons = (
+                    cast("list[JsonDict]", seasons_obj)
+                    if isinstance(seasons_obj, list)
+                    else []
+                )
+                for s in seasons:
                     if s.get("seasonNumber") == season_num:
                         s["monitored"] = True
                         break
                 self.api.update_series(series_data)
                 return None
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self._update_mon_column(item, True)
                 self.status_label.setText(f"Monitored: {label}")
 
@@ -954,7 +1014,7 @@ class MainWindow(QMainWindow):
             return
 
         if node_type == "episode":
-            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            ep_payloads = self._item_role_payloads(item, ROLE_EPISODE_DATA)
             if not ep_payloads:
                 self.status_label.setText("No episode payload found for monitor action")
                 return
@@ -965,7 +1025,7 @@ class MainWindow(QMainWindow):
                     self.api.update_episode(ep)
                 return None
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self._update_mon_column(item, True)
                 self.status_label.setText(f"Monitored: {label}")
 
@@ -974,8 +1034,11 @@ class MainWindow(QMainWindow):
             )
 
     def _ctx_unmonitor(self, item: QStandardItem, node_type: str):
-        series_id = item.data(ROLE_SERIES_ID)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
         label = item.text()
+        if series_id is None:
+            self.status_label.setText("No series ID available")
+            return
 
         if node_type == "series":
 
@@ -985,26 +1048,38 @@ class MainWindow(QMainWindow):
                 self.api.update_series(series_data)
                 return {"episode_failures": 0}
 
-            def _on_success(result):
+            def _on_series_success(result: object) -> None:
                 self._update_mon_column(item, False)
                 msg = f"Unmonitored: {label}"
-                failures = result.get("episode_failures", 0)
+                failures = self._result_int(result, "episode_failures")
                 if failures:
                     msg += f" ({failures} episode update errors)"
                 self.status_label.setText(msg)
 
             self._run_api_action(
-                f"Unmonitoring: {label}...", _action, _on_success, "Failed to unmonitor"
+                f"Unmonitoring: {label}...",
+                _action,
+                _on_series_success,
+                "Failed to unmonitor",
             )
             return
 
         if node_type == "season":
-            season_num = item.data(ROLE_SEASON_NUM)
+            season_num = self._item_role_int(item, ROLE_SEASON_NUM)
+            if season_num is None:
+                self.status_label.setText("No season number available")
+                return
             season_episodes = self._collect_episode_payloads(item)
 
             def _action():
                 series_data = self.api.get_series_by_id(series_id)
-                for s in series_data.get("seasons", []):
+                seasons_obj = series_data.get("seasons", [])
+                seasons = (
+                    cast("list[JsonDict]", seasons_obj)
+                    if isinstance(seasons_obj, list)
+                    else []
+                )
+                for s in seasons:
                     if s.get("seasonNumber") == season_num:
                         s["monitored"] = False
                         break
@@ -1018,24 +1093,27 @@ class MainWindow(QMainWindow):
                         failures += 1
                 return {"episode_failures": failures}
 
-            def _on_success(result):
+            def _on_season_success(result: object) -> None:
                 self._update_mon_column(item, False)
                 for row in range(item.rowCount()):
                     ep_item = item.child(row, 0)
                     self._update_mon_column(ep_item, False)
                 msg = f"Unmonitored: {label}"
-                failures = result.get("episode_failures", 0)
+                failures = self._result_int(result, "episode_failures")
                 if failures:
                     msg += f" ({failures} episode update errors)"
                 self.status_label.setText(msg)
 
             self._run_api_action(
-                f"Unmonitoring: {label}...", _action, _on_success, "Failed to unmonitor"
+                f"Unmonitoring: {label}...",
+                _action,
+                _on_season_success,
+                "Failed to unmonitor",
             )
             return
 
         if node_type == "episode":
-            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            ep_payloads = self._item_role_payloads(item, ROLE_EPISODE_DATA)
             if not ep_payloads:
                 self.status_label.setText(
                     "No episode payload found for unmonitor action"
@@ -1048,7 +1126,7 @@ class MainWindow(QMainWindow):
                     self.api.update_episode(ep)
                 return {"episode_failures": 0}
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self._update_mon_column(item, False)
                 self.status_label.setText(f"Unmonitored: {label}")
 
@@ -1057,8 +1135,11 @@ class MainWindow(QMainWindow):
             )
 
     def _ctx_auto_search(self, item: QStandardItem, node_type: str):
-        series_id = item.data(ROLE_SERIES_ID)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
         label = item.text()
+        if series_id is None:
+            self.status_label.setText("No series ID available")
+            return
 
         if node_type == "series":
 
@@ -1066,7 +1147,7 @@ class MainWindow(QMainWindow):
                 self.api.series_search(series_id)
                 return None
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self.status_label.setText(f"Auto search started: {label}")
 
             self._run_api_action(
@@ -1078,13 +1159,16 @@ class MainWindow(QMainWindow):
             return
 
         if node_type == "season":
-            season_num = item.data(ROLE_SEASON_NUM)
+            season_num = self._item_role_int(item, ROLE_SEASON_NUM)
+            if season_num is None:
+                self.status_label.setText("No season number available")
+                return
 
             def _action():
                 self.api.season_search(series_id, season_num)
                 return None
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self.status_label.setText(f"Auto search started: {label}")
 
             self._run_api_action(
@@ -1096,8 +1180,12 @@ class MainWindow(QMainWindow):
             return
 
         if node_type == "episode":
-            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
-            ep_ids = [ep["id"] for ep in ep_payloads if "id" in ep]
+            ep_payloads = self._item_role_payloads(item, ROLE_EPISODE_DATA)
+            ep_ids = [
+                episode_id
+                for ep in ep_payloads
+                if isinstance((episode_id := ep.get("id")), int)
+            ]
             if not ep_ids:
                 QMessageBox.warning(
                     self, "No Episodes", "No episode IDs found for auto search."
@@ -1108,7 +1196,7 @@ class MainWindow(QMainWindow):
                 self.api.episode_search(ep_ids)
                 return None
 
-            def _on_success(_result):
+            def _on_success(_result: object) -> None:
                 self.status_label.setText(f"Auto search started: {label}")
 
             self._run_api_action(
@@ -1120,11 +1208,15 @@ class MainWindow(QMainWindow):
 
     def _ctx_manual_search(self, item: QStandardItem, node_type: str):
         label = item.text()
-        series_id = item.data(ROLE_SERIES_ID)
-        season_num = item.data(ROLE_SEASON_NUM)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
+        season_num = self._item_role_int(item, ROLE_SEASON_NUM)
         if node_type == "episode":
-            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
-            ep_ids = [ep["id"] for ep in ep_payloads if "id" in ep]
+            ep_payloads = self._item_role_payloads(item, ROLE_EPISODE_DATA)
+            ep_ids = [
+                episode_id
+                for ep in ep_payloads
+                if isinstance((episode_id := ep.get("id")), int)
+            ]
             if not ep_ids:
                 QMessageBox.warning(
                     self, "No Episodes", "No episode IDs found for manual search."
@@ -1159,22 +1251,32 @@ class MainWindow(QMainWindow):
         else:
             return
 
-        def _on_search_success(releases: list[dict]):
-            if not releases:
+        def _on_search_success(releases: object) -> None:
+            release_list = self._as_json_list(releases)
+            if not release_list:
                 QMessageBox.information(self, "No Results", "No releases found.")
                 self.status_label.setText("No releases found")
                 return
-            dlg = ManualSearchDialog(self, label, releases, settings=self._settings)
-            if dlg.exec() != QDialog.Accepted or not dlg.selected_release:
+            dlg = ManualSearchDialog(
+                self,
+                label,
+                release_list,
+                settings=self._settings,
+            )
+            if dlg.exec() != _DIALOG_ACCEPTED or not dlg.selected_release:
                 self.status_label.setText("Manual search cancelled")
                 return
             rel = dlg.selected_release
 
             def _download_action():
-                self.api.download_release(rel["guid"], rel["indexerId"])
+                guid = rel.get("guid")
+                indexer_id = rel.get("indexerId")
+                if not isinstance(guid, str) or not isinstance(indexer_id, int):
+                    return None
+                self.api.download_release(guid, indexer_id)
                 return None
 
-            def _on_download_success(_result):
+            def _on_download_success(_result: object) -> None:
                 self.status_label.setText(f"Download queued: {rel.get('title', '?')}")
 
             self._run_api_action(
@@ -1197,25 +1299,25 @@ class MainWindow(QMainWindow):
             self,
             "Delete from Disk",
             f'Delete "{label}" files from disk?\n\nMonitoring status will not change.\nThis cannot be undone.',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            _MSG_YES | _MSG_NO,
+            _MSG_NO,
         )
-        if reply != QMessageBox.Yes:
+        if reply != _MSG_YES:
             return
         if node_type == "series":
-            series_path = item.data(ROLE_SERIES_PATH)
-            file_ids: list[int] = []
+            series_path = self._item_role_str(item, ROLE_SERIES_PATH)
+            series_file_ids: list[int] = []
             for s_row in range(item.rowCount()):
                 season_item = item.child(s_row, 0)
                 for ep_row in range(season_item.rowCount()):
                     ep_item = season_item.child(ep_row, 0)
-                    file_id = ep_item.data(ROLE_FILE_ID)
+                    file_id = self._item_role_int(ep_item, ROLE_FILE_ID)
                     if file_id:
-                        file_ids.append(file_id)
+                        series_file_ids.append(file_id)
 
             def _action():
                 api_failures = 0
-                for file_id in file_ids:
+                for file_id in series_file_ids:
                     try:
                         self.api.delete_episode_file(file_id)
                     except Exception:
@@ -1227,17 +1329,20 @@ class MainWindow(QMainWindow):
                     "fs_error": fs_error,
                 }
 
-            def _on_success(result):
+            def _on_success(result: object) -> None:
                 msg = f"Deleted from disk: {label}"
-                if result["api_failures"]:
-                    msg += f" ({result['api_failures']} API delete errors)"
-                if not result["fs_deleted"]:
+                api_failures = self._result_int(result, "api_failures")
+                fs_deleted = self._result_bool(result, "fs_deleted")
+                fs_error = self._result_str(result, "fs_error")
+                if api_failures:
+                    msg += f" ({api_failures} API delete errors)"
+                if not fs_deleted:
                     msg += " (disk delete failed)"
-                    if result["fs_error"]:
+                    if fs_error:
                         QMessageBox.warning(
                             self,
                             "Delete Warning",
-                            f"Disk delete failed:\n{result['fs_error']}",
+                            f"Disk delete failed:\n{fs_error}",
                         )
                 else:
                     parent = item.parent() or self.model.invisibleRootItem()
@@ -1252,11 +1357,11 @@ class MainWindow(QMainWindow):
             )
             return
         if node_type == "season":
-            season_path = item.data(ROLE_SEASON_PATH)
-            file_ids = []
+            season_path = self._item_role_str(item, ROLE_SEASON_PATH)
+            file_ids: list[int] = []
             for row in range(item.rowCount()):
                 ep_item = item.child(row, 0)
-                file_id = ep_item.data(ROLE_FILE_ID)
+                file_id = self._item_role_int(ep_item, ROLE_FILE_ID)
                 if file_id:
                     file_ids.append(file_id)
 
@@ -1274,17 +1379,20 @@ class MainWindow(QMainWindow):
                     "fs_error": fs_error,
                 }
 
-            def _on_success(result):
+            def _on_success(result: object) -> None:
                 msg = f"Deleted from disk: {label}"
-                if result["api_failures"]:
-                    msg += f" ({result['api_failures']} API delete errors)"
-                if not result["fs_deleted"]:
+                api_failures = self._result_int(result, "api_failures")
+                fs_deleted = self._result_bool(result, "fs_deleted")
+                fs_error = self._result_str(result, "fs_error")
+                if api_failures:
+                    msg += f" ({api_failures} API delete errors)"
+                if not fs_deleted:
                     msg += " (disk delete failed)"
-                    if result["fs_error"]:
+                    if fs_error:
                         QMessageBox.warning(
                             self,
                             "Delete Warning",
-                            f"Disk delete failed:\n{result['fs_error']}",
+                            f"Disk delete failed:\n{fs_error}",
                         )
                 else:
                     parent = item.parent() or self.model.invisibleRootItem()
@@ -1299,8 +1407,8 @@ class MainWindow(QMainWindow):
             )
             return
         if node_type == "episode":
-            file_id = item.data(ROLE_FILE_ID)
-            file_path = item.data(ROLE_FILE_PATH)
+            file_id = self._item_role_int(item, ROLE_FILE_ID)
+            file_path = self._item_role_str(item, ROLE_FILE_PATH)
             if not file_id and not file_path:
                 self.status_label.setText("No file found for this episode")
                 return
@@ -1319,17 +1427,20 @@ class MainWindow(QMainWindow):
                     "fs_error": fs_error,
                 }
 
-            def _on_success(result):
+            def _on_success(result: object) -> None:
                 msg = f"Deleted from disk: {label}"
-                if result["api_failures"]:
-                    msg += f" ({result['api_failures']} API delete errors)"
-                if not result["fs_deleted"]:
+                api_failures = self._result_int(result, "api_failures")
+                fs_deleted = self._result_bool(result, "fs_deleted")
+                fs_error = self._result_str(result, "fs_error")
+                if api_failures:
+                    msg += f" ({api_failures} API delete errors)"
+                if not fs_deleted:
                     msg += " (disk delete failed)"
-                    if result["fs_error"]:
+                    if fs_error:
                         QMessageBox.warning(
                             self,
                             "Delete Warning",
-                            f"Disk delete failed:\n{result['fs_error']}",
+                            f"Disk delete failed:\n{fs_error}",
                         )
                 else:
                     parent = item.parent() or self.model.invisibleRootItem()
@@ -1345,11 +1456,14 @@ class MainWindow(QMainWindow):
 
     def _ctx_change_quality_profile(self, item: QStandardItem):
         """Change quality profile for a series via a combo-box dialog."""
-        node_type = item.data(ROLE_NODE_TYPE)
+        node_type = self._item_role_str(item, ROLE_NODE_TYPE)
         if node_type != "series":
             self.status_label.setText("Quality profile can only be changed on a series")
             return
-        series_id = item.data(ROLE_SERIES_ID)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
+        if series_id is None:
+            self.status_label.setText("No series ID available")
+            return
         if not self._quality_profiles:
             QMessageBox.critical(self, "Error", "No quality profiles available.")
             return
@@ -1358,40 +1472,56 @@ class MainWindow(QMainWindow):
         def _fetch_action():
             return self.api.get_series_by_id(series_id)
 
-        def _on_fetched(series_data: dict):
-            current_qp_id = series_data.get("qualityProfileId", 0)
+        def _on_fetched(series_data: object) -> None:
+            series_payload = self._as_json_dict(series_data)
+            if series_payload is None:
+                self.status_label.setText("Failed to load quality profile data")
+                return
+            current_qp_value = series_payload.get("qualityProfileId", 0)
+            current_qp_id = current_qp_value if isinstance(current_qp_value, int) else 0
             dlg = QDialog(self)
             dlg.setWindowTitle("Change Quality Profile")
             lay = QVBoxLayout(dlg)
             lay.addWidget(QLabel(f"Quality profile for: {label}"))
             combo = QComboBox()
             current_idx = 0
-            for i, p in enumerate(self._quality_profiles):
-                combo.addItem(p["name"], p["id"])
-                if p["id"] == current_qp_id:
-                    current_idx = i
+            for p in self._quality_profiles:
+                profile_name = p.get("name")
+                profile_id = p.get("id")
+                if not isinstance(profile_name, str) or not isinstance(profile_id, int):
+                    continue
+                combo_index = combo.count()
+                combo.addItem(profile_name, profile_id)
+                if profile_id == current_qp_id:
+                    current_idx = combo_index
             combo.setCurrentIndex(current_idx)
             lay.addWidget(combo)
-            btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-            btns.accepted.connect(dlg.accept)
-            btns.rejected.connect(dlg.reject)
+            btns = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok
+                | QDialogButtonBox.StandardButton.Cancel
+            )
+            _ = btns.accepted.connect(dlg.accept)
+            _ = btns.rejected.connect(dlg.reject)
             lay.addWidget(btns)
-            if dlg.exec() != QDialog.Accepted:
+            if dlg.exec() != _DIALOG_ACCEPTED:
                 self.status_label.setText("Quality profile change cancelled")
                 return
             new_qp_id = combo.currentData()
+            if not isinstance(new_qp_id, int):
+                self.status_label.setText("Selected quality profile is invalid")
+                return
             if new_qp_id == current_qp_id:
                 self.status_label.setText("Quality profile unchanged")
                 return
             selected_name = combo.currentText()
 
             def _update_action():
-                payload = dict(series_data)
+                payload: JsonDict = dict(series_payload)
                 payload["qualityProfileId"] = new_qp_id
                 self.api.update_series(payload)
                 return None
 
-            def _on_updated(_result):
+            def _on_updated(_result: object) -> None:
                 row_idx = item.index().row()
                 parent = item.parent() or self.model.invisibleRootItem()
                 qp_item = parent.child(row_idx, 3)
@@ -1416,49 +1546,55 @@ class MainWindow(QMainWindow):
         )
 
     def _ctx_unmonitor_delete(self, item: QStandardItem, node_type: str):
-        series_id = item.data(ROLE_SERIES_ID)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
         label = item.text()
+        if series_id is None:
+            self.status_label.setText("No series ID available")
+            return
         reply = QMessageBox.question(
             self,
             "Unmonitor & Delete",
             f'Unmonitor "{label}" and delete files from disk?\n\nThis cannot be undone.',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            _MSG_YES | _MSG_NO,
+            _MSG_NO,
         )
-        if reply != QMessageBox.Yes:
+        if reply != _MSG_YES:
             return
         if node_type == "series":
 
-            def _action():
+            def _delete_series_action():
                 self.api.delete_series(series_id, delete_files=True)
                 return {"api_failures": 0}
 
-            def _on_success(_result):
+            def _delete_series_success(_result: object) -> None:
                 parent = item.parent() or self.model.invisibleRootItem()
                 parent.removeRow(item.row())
                 self.status_label.setText(f"Deleted & unmonitored: {label}")
 
             self._run_api_action(
                 f"Deleting & unmonitoring: {label}...",
-                _action,
-                _on_success,
+                _delete_series_action,
+                _delete_series_success,
                 "Unmonitor & delete failed",
             )
             return
         if node_type == "season":
-            season_num = item.data(ROLE_SEASON_NUM)
-            season_path = item.data(ROLE_SEASON_PATH)
-            file_ids: list[int] = []
+            season_num = self._item_role_int(item, ROLE_SEASON_NUM)
+            season_path = self._item_role_str(item, ROLE_SEASON_PATH)
+            if season_num is None:
+                self.status_label.setText("No season number available")
+                return
+            season_file_ids: list[int] = []
             for row in range(item.rowCount()):
                 ep_item = item.child(row, 0)
-                file_id = ep_item.data(ROLE_FILE_ID)
+                file_id = self._item_role_int(ep_item, ROLE_FILE_ID)
                 if file_id:
-                    file_ids.append(file_id)
+                    season_file_ids.append(file_id)
             season_episodes = self._collect_episode_payloads(item)
 
             def _action():
                 api_failures = 0
-                for file_id in file_ids:
+                for file_id in season_file_ids:
                     try:
                         self.api.delete_episode_file(file_id)
                     except Exception:
@@ -1471,7 +1607,13 @@ class MainWindow(QMainWindow):
                         api_failures += 1
                 try:
                     series_data = self.api.get_series_by_id(series_id)
-                    for s in series_data.get("seasons", []):
+                    seasons_obj = series_data.get("seasons", [])
+                    seasons = (
+                        cast("list[JsonDict]", seasons_obj)
+                        if isinstance(seasons_obj, list)
+                        else []
+                    )
+                    for s in seasons:
                         if s.get("seasonNumber") == season_num:
                             s["monitored"] = False
                             break
@@ -1485,17 +1627,20 @@ class MainWindow(QMainWindow):
                     "fs_error": fs_error,
                 }
 
-            def _on_success(result):
+            def _on_success(result: object) -> None:
                 msg = f"Deleted & unmonitored: {label}"
-                if result["api_failures"]:
-                    msg += f" ({result['api_failures']} API errors)"
-                if not result["fs_deleted"]:
+                api_failures = self._result_int(result, "api_failures")
+                fs_deleted = self._result_bool(result, "fs_deleted")
+                fs_error = self._result_str(result, "fs_error")
+                if api_failures:
+                    msg += f" ({api_failures} API errors)"
+                if not fs_deleted:
                     msg += " (disk delete failed)"
-                    if result["fs_error"]:
+                    if fs_error:
                         QMessageBox.warning(
                             self,
                             "Delete Warning",
-                            f"Disk delete failed:\n{result['fs_error']}",
+                            f"Disk delete failed:\n{fs_error}",
                         )
                     self._update_mon_column(item, False)
                     for row in range(item.rowCount()):
@@ -1514,9 +1659,9 @@ class MainWindow(QMainWindow):
             )
             return
         if node_type == "episode":
-            file_id = item.data(ROLE_FILE_ID)
-            file_path = item.data(ROLE_FILE_PATH)
-            ep_payloads = self._clone_episode_payloads(item.data(ROLE_EPISODE_DATA))
+            file_id = self._item_role_int(item, ROLE_FILE_ID)
+            file_path = self._item_role_str(item, ROLE_FILE_PATH)
+            ep_payloads = self._item_role_payloads(item, ROLE_EPISODE_DATA)
 
             def _action():
                 api_failures = 0
@@ -1538,17 +1683,20 @@ class MainWindow(QMainWindow):
                     "fs_error": fs_error,
                 }
 
-            def _on_success(result):
+            def _on_success(result: object) -> None:
                 msg = f"Deleted & unmonitored: {label}"
-                if result["api_failures"]:
-                    msg += f" ({result['api_failures']} API errors)"
-                if not result["fs_deleted"]:
+                api_failures = self._result_int(result, "api_failures")
+                fs_deleted = self._result_bool(result, "fs_deleted")
+                fs_error = self._result_str(result, "fs_error")
+                if api_failures:
+                    msg += f" ({api_failures} API errors)"
+                if not fs_deleted:
                     msg += " (disk delete failed)"
-                    if result["fs_error"]:
+                    if fs_error:
                         QMessageBox.warning(
                             self,
                             "Delete Warning",
-                            f"Disk delete failed:\n{result['fs_error']}",
+                            f"Disk delete failed:\n{fs_error}",
                         )
                     self._update_mon_column(item, False)
                 else:
@@ -1586,21 +1734,21 @@ class MainWindow(QMainWindow):
             self._activate_item(item)
 
     def _activate_item(self, item: QStandardItem):
-        node_type = item.data(ROLE_NODE_TYPE)
+        node_type = self._item_role_str(item, ROLE_NODE_TYPE)
         if node_type == "series":
-            path = item.data(ROLE_SERIES_PATH)
+            path = self._item_role_str(item, ROLE_SERIES_PATH)
             if path and os.path.isdir(path):
                 open_path_in_default_app(path)
             else:
                 self.status_label.setText(f"Directory not found: {path}")
         elif node_type == "season":
-            path = item.data(ROLE_SEASON_PATH)
+            path = self._item_role_str(item, ROLE_SEASON_PATH)
             if path and os.path.isdir(path):
                 open_path_in_default_app(path)
             else:
                 self.status_label.setText(f"Directory not found: {path}")
         elif node_type == "episode":
-            path = item.data(ROLE_FILE_PATH)
+            path = self._item_role_str(item, ROLE_FILE_PATH)
             if path and os.path.isfile(path):
                 open_path_in_default_app(path)
             else:
@@ -1612,30 +1760,33 @@ class MainWindow(QMainWindow):
         item = self._current_item()
         if not item:
             return
-        node_type = item.data(ROLE_NODE_TYPE)
+        node_type = self._item_role_str(item, ROLE_NODE_TYPE)
         if node_type == "series":
             self._delete_series(item)
         elif node_type == "season":
             self._delete_season(item)
 
     def _delete_series(self, item: QStandardItem):
-        series_id = item.data(ROLE_SERIES_ID)
+        series_id = self._item_role_int(item, ROLE_SERIES_ID)
         title = item.text()
+        if series_id is None:
+            self.status_label.setText("No series ID available")
+            return
         reply = QMessageBox.question(
             self,
             "Delete Series",
             f'Delete "{title}" from Sonarr AND from disk?\n\nThis cannot be undone.',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            _MSG_YES | _MSG_NO,
+            _MSG_NO,
         )
-        if reply != QMessageBox.Yes:
+        if reply != _MSG_YES:
             return
 
         def _action():
             self.api.delete_series(series_id, delete_files=True)
             return None
 
-        def _on_success(_result):
+        def _on_success(_result: object) -> None:
             parent = item.parent() or self.model.invisibleRootItem()
             parent.removeRow(item.row())
             self.status_label.setText(f"Deleted series: {title}")
@@ -1657,10 +1808,10 @@ class MainWindow(QMainWindow):
         if not self._ensure_action_idle():
             return
         dlg = AddShowDialog(self, self.api)
-        if dlg.exec() == QDialog.Accepted and dlg.added_series:
+        if dlg.exec() == _DIALOG_ACCEPTED and dlg.added_series:
             self._refresh()
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent) -> None:
         """Save column widths and stop worker before closing."""
         widths = [self.tree.columnWidth(c) for c in range(len(self._columns))]
         self._settings.set_value(self._ui_key("column_widths"), widths)
@@ -1679,10 +1830,10 @@ class MainWindow(QMainWindow):
                 "Background task still running",
                 "A refresh is still in progress and did not stop in time.\n"
                 "Force close now?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                _MSG_YES | _MSG_NO,
+                _MSG_NO,
             )
-            if reply != QMessageBox.Yes:
+            if reply != _MSG_YES:
                 event.ignore()
                 return
             worker = self.worker
