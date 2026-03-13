@@ -558,7 +558,7 @@ class MainWindow(QMainWindow):
             self.tree.resizeColumnToContents(col)
         self.status_label.setText("Columns fitted to contents")
 
-    def _on_data_loaded(self, series_list: list):
+    def _on_data_loaded(self, series_list: list[LoadedSeriesEntry]) -> None:
         self.progress_bar.hide()
         self.model.removeRows(0, self.model.rowCount())
 
@@ -577,6 +577,7 @@ class MainWindow(QMainWindow):
         missing_color = QColor(128, 128, 128)  # grey for missing episodes
 
         for s in series_list:
+            series_data = s["series_data"]
             # ── Series row ──
             series_label = f"{s['title']}, {s['year']}" if s["year"] else s["title"]
             series_item = QStandardItem(series_label)
@@ -592,9 +593,10 @@ class MainWindow(QMainWindow):
             series_row[0] = series_item
             series_row[1].setText(fmt_size(s["total_size"]))
             series_row[2].setText(
-                "Y" if s["series_data"].get("monitored", False) else "N"
+                "Y" if bool(series_data.get("monitored", False)) else "N"
             )
-            qp_id = s["series_data"].get("qualityProfileId", 0)
+            qp_id_obj = series_data.get("qualityProfileId", 0)
+            qp_id = qp_id_obj if isinstance(qp_id_obj, int) else 0
             series_row[3].setText(self._qp_map.get(qp_id, str(qp_id)))
 
             all_season_nums = s["all_season_nums"]
@@ -604,7 +606,7 @@ class MainWindow(QMainWindow):
             for sn in all_season_nums:
                 downloaded_eps = downloaded_seasons.get(sn, [])
                 missing_eps = missing_seasons.get(sn, [])
-                season_size = sum(e["size_bytes"] for e in downloaded_eps)
+                season_size = sum(entry["size_bytes"] for entry in downloaded_eps)
 
                 # build season path from first downloaded episode's directory
                 season_path = ""
@@ -631,9 +633,15 @@ class MainWindow(QMainWindow):
 
                 # season monitored status from series metadata
                 season_monitored = True
-                for s_info in s["series_data"].get("seasons", []):
+                season_info_obj = series_data.get("seasons", [])
+                season_info_list = (
+                    cast("list[JsonDict]", season_info_obj)
+                    if isinstance(season_info_obj, list)
+                    else []
+                )
+                for s_info in season_info_list:
                     if s_info.get("seasonNumber") == sn:
-                        season_monitored = s_info.get("monitored", True)
+                        season_monitored = bool(s_info.get("monitored", True))
                         break
 
                 season_row = self._make_row(len(self._columns))
@@ -659,7 +667,8 @@ class MainWindow(QMainWindow):
                     ep_row[0] = ep_item
                     ep_row[1].setText(fmt_size(ep["size_bytes"]))
                     ep_monitored = any(
-                        e.get("monitored", False) for e in ep.get("episode_data", [])
+                        bool(payload.get("monitored", False))
+                        for payload in ep["episode_data"]
                     )
                     ep_row[2].setText("Y" if ep_monitored else "N")
                     ep_row[4].setText(ep["video_resolution"])
@@ -676,9 +685,10 @@ class MainWindow(QMainWindow):
 
                 # missing episodes
                 for mep in missing_eps:
-                    ep_num = mep.get("episodeNumber", 0)
-                    ep_title = mep.get("title", "")
-                    monitored = mep.get("monitored", False)
+                    ep_num_obj = mep.get("episodeNumber", 0)
+                    ep_num = ep_num_obj if isinstance(ep_num_obj, int) else 0
+                    ep_title = str(mep.get("title", ""))
+                    monitored = bool(mep.get("monitored", False))
                     ep_label = f"E{ep_num:02d} - {ep_title}"
                     ep_item = QStandardItem(ep_label)
                     ep_item.setEditable(False)
