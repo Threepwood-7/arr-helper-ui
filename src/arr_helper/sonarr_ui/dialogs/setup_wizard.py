@@ -102,7 +102,8 @@ class ArrSetupWizardDialog(QDialog):
         root = QVBoxLayout(self)
         root.addWidget(
             QLabel(
-                "Set Sonarr/Radarr connection settings. Values are stored in the shared settings INI."
+                "Set Sonarr/Radarr connection settings. Values are stored in "
+                "the shared settings INI."
             )
         )
 
@@ -269,7 +270,8 @@ class ArrSetupWizardDialog(QDialog):
             QMessageBox.information(
                 self,
                 "Connection Test",
-                f"{service_name} connection successful.\nDetected: {app_name} {version}",
+                f"{service_name} connection successful.\n"
+                f"Detected: {app_name} {version}",
             )
         except requests.RequestException as exc:
             QMessageBox.critical(

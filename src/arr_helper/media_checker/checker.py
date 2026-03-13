@@ -422,7 +422,8 @@ class MediaQualityChecker:
 
             self.console.print(table)
             self.console.print(
-                f"\n[dim]Showing {len(filtered_releases)} of {len(releases)} releases[/dim]"
+                "\n[dim]Showing "
+                f"{len(filtered_releases)} of {len(releases)} releases[/dim]"
             )
 
             # Ask user to select
@@ -434,35 +435,29 @@ class MediaQualityChecker:
             self.console.print("  Enter -1 to keep current file")
 
             try:
-                choice_input = input("\n[Your choice]: ").strip()
-
-                if choice_input.lower() == "s":
-                    # Search/filter mode
+                choice_input = input("\n[Your choice]: ").strip().lower()
+                if choice_input == "s":
                     search_term = input("Enter search term: ").strip()
                     continue
-                elif choice_input.lower() == "c":
-                    # Clear filter
+                if choice_input == "c":
                     search_term = ""
                     continue
-
                 choice = int(choice_input)
-
                 if choice == -1:
-                    return None  # Keep current
-                elif choice == 0:
-                    # Skip and remember permanently
+                    return None
+                if choice == 0:
                     self._add_skipped_file(file_path)
                     self.save_caches()
                     self.console.print("[yellow]Marked to skip permanently[/yellow]")
                     return None
-                elif 1 <= choice <= len(filtered_releases):
+                if 1 <= choice <= len(filtered_releases):
                     return filtered_releases[choice - 1]
-                else:
-                    self.console.print("[red]Invalid choice[/red]")
-                    continue
+                self.console.print("[red]Invalid choice[/red]")
+                continue
             except ValueError:
                 self.console.print(
-                    "[red]Invalid input. Please enter a number, 's', 'c', 0, or -1[/red]"
+                    "[red]Invalid input. Please enter a number, 's', 'c', 0, "
+                    "or -1[/red]"
                 )
                 continue
             except KeyboardInterrupt:
@@ -541,6 +536,199 @@ class MediaQualityChecker:
         if missing_search_message:
             print(f"     {missing_search_message}")
 
+    def _print_sonarr_series_header(
+        self,
+        *,
+        series_title: str,
+        file_count: int,
+    ) -> None:
+        """Print the heading for one Sonarr series scan."""
+
+        if self.interactive:
+            self.console.print(
+                f"\n[bold white]Checking series:[/bold white] {series_title} "
+                f"[dim]({file_count} files)[/dim]"
+            )
+            return
+        print(f"\nChecking series: {series_title} ({file_count} files)")
+
+    def _handle_interactive_sonarr_issue(
+        self,
+        *,
+        file_path: str,
+        file_id: int,
+        filename: str,
+        has_eng_audio: bool,
+        has_eng_subs: bool,
+        series_id: int,
+        quality_profile_id: int | None,
+        dry_run: bool,
+    ) -> None:
+        """Handle one Sonarr issue in interactive mode."""
+
+        self.console.print(f"\n[red]X Issue found:[/red] {filename}")
+        self.console.print(
+            f"  [yellow]English audio:[/yellow] {'YES' if has_eng_audio else 'NO'}"
+        )
+        self.console.print(
+            f"  [yellow]English subs:[/yellow] {'YES' if has_eng_subs else 'NO'}"
+        )
+
+        episode_ids = self.get_episodes_for_file(series_id, file_id)
+        if not episode_ids:
+            self.console.print("[yellow]No episode IDs found for this file[/yellow]")
+            return
+        view_alternatives = Confirm.ask(
+            "\n[bold cyan]View alternative releases?[/bold cyan]",
+            default=False,
+        )
+        if not view_alternatives:
+            self._add_skipped_file(file_path)
+            self.save_caches()
+            self.console.print("[yellow]Marked to skip permanently[/yellow]")
+            return
+
+        releases = self.get_episode_releases(episode_ids[0], quality_profile_id)
+        selected_release = self.display_releases_and_select(
+            releases,
+            filename,
+            file_path,
+        )
+        if not selected_release:
+            return
+        if dry_run:
+            self.console.print("[dim]DRY RUN: Would download selected release[/dim]")
+            return
+        self.console.print("[yellow]Deleting current file...[/yellow]")
+        self._make_request(
+            self.sonarr_url,
+            self.sonarr_api,
+            f"episodefile/{file_id}",
+            method="DELETE",
+            auth=self.sonarr_http_auth,
+        )
+        self.download_release(
+            self.sonarr_url,
+            self.sonarr_api,
+            selected_release,
+            is_sonarr=True,
+        )
+
+    def _handle_noninteractive_sonarr_issue(
+        self,
+        *,
+        file_path: str,
+        file_id: int,
+        filename: str,
+        has_eng_audio: bool,
+        has_eng_subs: bool,
+        series_id: int,
+        dry_run: bool,
+    ) -> None:
+        """Handle one Sonarr issue in non-interactive mode."""
+
+        print(f"  X {filename}")
+        print(f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}")
+        if dry_run:
+            print("     [DRY RUN] Would delete and re-download")
+            return
+        episode_ids = self.get_episodes_for_file(series_id, file_id)
+        self._delete_file_and_trigger_search(
+            url=self.sonarr_url,
+            api_key=self.sonarr_api,
+            file_endpoint=f"episodefile/{file_id}",
+            auth=self.sonarr_http_auth,
+            search_payload={
+                "name": "EpisodeSearch",
+                "episodeIds": episode_ids,
+            }
+            if episode_ids
+            else None,
+            trigger_message="Triggering episode search...",
+            missing_search_message=(
+                "Could not resolve episode IDs before delete; search not triggered"
+            ),
+        )
+
+    def _process_sonarr_series(
+        self,
+        series: ConfigMap,
+        *,
+        dry_run: bool,
+    ) -> None:
+        """Process one Sonarr series payload."""
+
+        series_id = self._payload_int(series, "id")
+        series_title = self._payload_str(series, "title", "?")
+        quality_profile_id = self._payload_int(series, "qualityProfileId")
+        if series_id is None:
+            return
+        episode_files = self._make_request(
+            self.sonarr_url,
+            self.sonarr_api,
+            f"episodefile?seriesId={series_id}",
+            auth=self.sonarr_http_auth,
+        )
+        if not isinstance(episode_files, list) or not episode_files:
+            return
+        self._print_sonarr_series_header(
+            series_title=series_title,
+            file_count=len(episode_files),
+        )
+
+        for ep_file in episode_files:
+            file_path = self._payload_str(ep_file, "path")
+            file_id = self._payload_int(ep_file, "id")
+            if not file_path or not file_id:
+                continue
+            if self._is_cached_match(self._good_files_map, file_path):
+                if self.interactive:
+                    self.console.print(
+                        "[dim]Skipping (already verified as OK): "
+                        f"{Path(file_path).name}[/dim]"
+                    )
+                continue
+
+            has_eng_audio, has_eng_subs = self.check_file_streams(file_path)
+            if not self.should_redownload(has_eng_audio, has_eng_subs):
+                self._add_good_file(file_path)
+                self.save_caches()
+                if self.interactive:
+                    self.console.print(f"[green]OK[/green] {Path(file_path).name}")
+                else:
+                    print(f"  OK {Path(file_path).name}")
+                continue
+
+            filename = Path(file_path).name
+            if self._is_cached_match(self._skipped_files_map, file_path):
+                if self.interactive:
+                    self.console.print(
+                        f"[dim]Skipping (previously marked to skip): {filename}[/dim]"
+                    )
+                continue
+
+            if self.interactive:
+                self._handle_interactive_sonarr_issue(
+                    file_path=file_path,
+                    file_id=file_id,
+                    filename=filename,
+                    has_eng_audio=has_eng_audio,
+                    has_eng_subs=has_eng_subs,
+                    series_id=series_id,
+                    quality_profile_id=quality_profile_id,
+                    dry_run=dry_run,
+                )
+                continue
+            self._handle_noninteractive_sonarr_issue(
+                file_path=file_path,
+                file_id=file_id,
+                filename=filename,
+                has_eng_audio=has_eng_audio,
+                has_eng_subs=has_eng_subs,
+                series_id=series_id,
+                dry_run=dry_run,
+            )
+
     def process_sonarr(self, dry_run: bool = False):
         """Process all Sonarr series and check episode files"""
         if self.interactive:
@@ -571,158 +759,162 @@ class MediaQualityChecker:
             print(f"Found {len(series_list)} series")
 
         for series in series_list:
-            series_id = self._payload_int(series, "id")
-            series_title = self._payload_str(series, "title", "?")
-            quality_profile_id = self._payload_int(series, "qualityProfileId")
-            if series_id is None:
-                continue
+            self._process_sonarr_series(series, dry_run=dry_run)
 
-            # Get episode files for this series
-            episode_files = self._make_request(
-                self.sonarr_url,
-                self.sonarr_api,
-                f"episodefile?seriesId={series_id}",
-                auth=self.sonarr_http_auth,
-            )
+    def _handle_interactive_radarr_issue(
+        self,
+        *,
+        file_path: str,
+        file_id: int,
+        movie_id: int,
+        movie_title: str,
+        filename: str,
+        has_eng_audio: bool,
+        has_eng_subs: bool,
+        quality_profile_id: int | None,
+        dry_run: bool,
+    ) -> None:
+        """Handle one Radarr issue in interactive mode."""
 
-            if not isinstance(episode_files, list) or not episode_files:
-                continue
+        self.console.print(f"\n[red]X Issue found:[/red] {movie_title}")
+        self.console.print(f"  [dim]File:[/dim] {filename}")
+        self.console.print(
+            f"  [yellow]English audio:[/yellow] {'YES' if has_eng_audio else 'NO'}"
+        )
+        self.console.print(
+            f"  [yellow]English subs:[/yellow] {'YES' if has_eng_subs else 'NO'}"
+        )
+        view_alternatives = Confirm.ask(
+            "\n[bold cyan]View alternative releases?[/bold cyan]",
+            default=False,
+        )
+        if not view_alternatives:
+            self._add_skipped_file(file_path)
+            self.save_caches()
+            self.console.print("[yellow]Marked to skip permanently[/yellow]")
+            return
 
+        releases = self.get_movie_releases(movie_id, quality_profile_id)
+        selected_release = self.display_releases_and_select(
+            releases,
+            movie_title,
+            file_path,
+        )
+        if not selected_release:
+            return
+        if dry_run:
+            self.console.print("[dim]DRY RUN: Would download selected release[/dim]")
+            return
+        self.console.print("[yellow]Deleting current file...[/yellow]")
+        self._make_request(
+            self.radarr_url,
+            self.radarr_api,
+            f"moviefile/{file_id}",
+            method="DELETE",
+            auth=self.radarr_http_auth,
+        )
+        self.download_release(
+            self.radarr_url,
+            self.radarr_api,
+            selected_release,
+            is_sonarr=False,
+        )
+
+    def _handle_noninteractive_radarr_issue(
+        self,
+        *,
+        file_id: int,
+        movie_id: int,
+        movie_title: str,
+        filename: str,
+        has_eng_audio: bool,
+        has_eng_subs: bool,
+        dry_run: bool,
+    ) -> None:
+        """Handle one Radarr issue in non-interactive mode."""
+
+        print(f"  X {movie_title}")
+        print(f"     File: {filename}")
+        print(f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}")
+        if dry_run:
+            print("     [DRY RUN] Would delete and re-download")
+            return
+        self._delete_file_and_trigger_search(
+            url=self.radarr_url,
+            api_key=self.radarr_api,
+            file_endpoint=f"moviefile/{file_id}",
+            auth=self.radarr_http_auth,
+            search_payload={
+                "name": "MoviesSearch",
+                "movieIds": [movie_id],
+            },
+            trigger_message="Triggering movie search...",
+        )
+
+    def _process_radarr_movie(
+        self,
+        movie: ConfigMap,
+        *,
+        dry_run: bool,
+    ) -> None:
+        """Process one Radarr movie payload."""
+
+        if not movie.get("hasFile"):
+            return
+        movie_id = self._payload_int(movie, "id")
+        movie_title = self._payload_str(movie, "title", "?")
+        quality_profile_id = self._payload_int(movie, "qualityProfileId")
+        movie_file = self._payload_map(movie, "movieFile")
+        file_path = self._payload_str(movie_file, "path")
+        file_id = self._payload_int(movie_file, "id")
+        if movie_id is None or not file_path or not file_id:
+            return
+        if self._is_cached_match(self._good_files_map, file_path):
             if self.interactive:
                 self.console.print(
-                    f"\n[bold white]Checking series:[/bold white] {series_title} [dim]({len(episode_files)} files)[/dim]"
+                    f"[dim]Skipping (already verified as OK): {movie_title}[/dim]"
                 )
+            return
+
+        has_eng_audio, has_eng_subs = self.check_file_streams(file_path)
+        if not self.should_redownload(has_eng_audio, has_eng_subs):
+            self._add_good_file(file_path)
+            self.save_caches()
+            if self.interactive:
+                self.console.print(f"[green]OK[/green] {movie_title}")
             else:
-                print(f"\nChecking series: {series_title} ({len(episode_files)} files)")
+                print(f"  OK {movie_title}")
+            return
 
-            for ep_file in episode_files:
-                file_path = self._payload_str(ep_file, "path")
-                file_id = self._payload_int(ep_file, "id")
-
-                if not file_path or not file_id:
-                    continue
-
-                # Check if file is already in good files cache
-                if self._is_cached_match(self._good_files_map, file_path):
-                    if self.interactive:
-                        self.console.print(
-                            f"[dim]Skipping (already verified as OK): {Path(file_path).name}[/dim]"
-                        )
-                    continue
-
-                # Check for English streams
-                has_eng_audio, has_eng_subs = self.check_file_streams(file_path)
-
-                if self.should_redownload(has_eng_audio, has_eng_subs):
-                    filename = Path(file_path).name
-
-                    # Check if this file was previously skipped BEFORE showing anything
-                    if self._is_cached_match(self._skipped_files_map, file_path):
-                        if self.interactive:
-                            self.console.print(
-                                f"[dim]Skipping (previously marked to skip): {filename}[/dim]"
-                            )
-                        continue
-
-                    if self.interactive:
-                        # Interactive mode - show details and ask for confirmation
-                        self.console.print(f"\n[red]X Issue found:[/red] {filename}")
-                        self.console.print(
-                            f"  [yellow]English audio:[/yellow] {'YES' if has_eng_audio else 'NO'}"
-                        )
-                        self.console.print(
-                            f"  [yellow]English subs:[/yellow] {'YES' if has_eng_subs else 'NO'}"
-                        )
-
-                        # Get episode IDs for this file
-                        episode_ids = self.get_episodes_for_file(series_id, file_id)
-
-                        if episode_ids:
-                            # Ask user what to do (default is No when pressing Enter)
-                            view_alternatives = Confirm.ask(
-                                "\n[bold cyan]View alternative releases?[/bold cyan]",
-                                default=False,
-                            )
-
-                            if view_alternatives:
-                                # Get releases for the first episode (they should be the same for multi-episode files)
-                                releases = self.get_episode_releases(
-                                    episode_ids[0], quality_profile_id
-                                )
-                                selected_release = self.display_releases_and_select(
-                                    releases, filename, file_path
-                                )
-
-                                if selected_release and not dry_run:
-                                    # Delete current file
-                                    self.console.print(
-                                        "[yellow]Deleting current file...[/yellow]"
-                                    )
-                                    self._make_request(
-                                        self.sonarr_url,
-                                        self.sonarr_api,
-                                        f"episodefile/{file_id}",
-                                        method="DELETE",
-                                        auth=self.sonarr_http_auth,
-                                    )
-
-                                    # Download selected release
-                                    self.download_release(
-                                        self.sonarr_url,
-                                        self.sonarr_api,
-                                        selected_release,
-                                        is_sonarr=True,
-                                    )
-                                elif selected_release and dry_run:
-                                    self.console.print(
-                                        "[dim]DRY RUN: Would download selected release[/dim]"
-                                    )
-                            else:
-                                # User said No - save to cache to skip this file next time
-                                self._add_skipped_file(file_path)
-                                self.save_caches()
-                                self.console.print(
-                                    "[yellow]Marked to skip permanently[/yellow]"
-                                )
-                        else:
-                            self.console.print(
-                                "[yellow]No episode IDs found for this file[/yellow]"
-                            )
-                    else:
-                        # Non-interactive mode - original behavior
-                        print(f"  X {filename}")
-                        print(
-                            f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}"
-                        )
-
-                        if not dry_run:
-                            # Capture episode ids before deleting the file mapping.
-                            episode_ids = self.get_episodes_for_file(series_id, file_id)
-                            self._delete_file_and_trigger_search(
-                                url=self.sonarr_url,
-                                api_key=self.sonarr_api,
-                                file_endpoint=f"episodefile/{file_id}",
-                                auth=self.sonarr_http_auth,
-                                search_payload={
-                                    "name": "EpisodeSearch",
-                                    "episodeIds": episode_ids,
-                                }
-                                if episode_ids
-                                else None,
-                                trigger_message="Triggering episode search...",
-                                missing_search_message="Could not resolve episode IDs before delete; search not triggered",
-                            )
-                        else:
-                            print("     [DRY RUN] Would delete and re-download")
-                else:
-                    # File is OK - add to cache
-                    self._add_good_file(file_path)
-                    self.save_caches()
-
-                    if self.interactive:
-                        self.console.print(f"[green]OK[/green] {Path(file_path).name}")
-                    else:
-                        print(f"  OK {Path(file_path).name}")
+        filename = Path(file_path).name
+        if self._is_cached_match(self._skipped_files_map, file_path):
+            if self.interactive:
+                self.console.print(
+                    f"[dim]Skipping (previously marked to skip): {movie_title}[/dim]"
+                )
+            return
+        if self.interactive:
+            self._handle_interactive_radarr_issue(
+                file_path=file_path,
+                file_id=file_id,
+                movie_id=movie_id,
+                movie_title=movie_title,
+                filename=filename,
+                has_eng_audio=has_eng_audio,
+                has_eng_subs=has_eng_subs,
+                quality_profile_id=quality_profile_id,
+                dry_run=dry_run,
+            )
+            return
+        self._handle_noninteractive_radarr_issue(
+            file_id=file_id,
+            movie_id=movie_id,
+            movie_title=movie_title,
+            filename=filename,
+            has_eng_audio=has_eng_audio,
+            has_eng_subs=has_eng_subs,
+            dry_run=dry_run,
+        )
 
     def process_radarr(self, dry_run: bool = False):
         """Process all Radarr movies and check movie files"""
@@ -754,124 +946,4 @@ class MediaQualityChecker:
             print(f"Found {len(movies)} movies")
 
         for movie in movies:
-            if not movie.get("hasFile"):
-                continue
-
-            movie_id = self._payload_int(movie, "id")
-            movie_title = self._payload_str(movie, "title", "?")
-            quality_profile_id = self._payload_int(movie, "qualityProfileId")
-            movie_file = self._payload_map(movie, "movieFile")
-            file_path = self._payload_str(movie_file, "path")
-            file_id = self._payload_int(movie_file, "id")
-
-            if movie_id is None or not file_path or not file_id:
-                continue
-
-            # Check if file is already in good files cache
-            if self._is_cached_match(self._good_files_map, file_path):
-                if self.interactive:
-                    self.console.print(
-                        f"[dim]Skipping (already verified as OK): {movie_title}[/dim]"
-                    )
-                continue
-
-            # Check for English streams
-            has_eng_audio, has_eng_subs = self.check_file_streams(file_path)
-
-            if self.should_redownload(has_eng_audio, has_eng_subs):
-                filename = Path(file_path).name
-
-                # Check if this file was previously skipped BEFORE showing anything
-                if self._is_cached_match(self._skipped_files_map, file_path):
-                    if self.interactive:
-                        self.console.print(
-                            f"[dim]Skipping (previously marked to skip): {movie_title}[/dim]"
-                        )
-                    continue
-
-                if self.interactive:
-                    # Interactive mode - show details and ask for confirmation
-                    self.console.print(f"\n[red]X Issue found:[/red] {movie_title}")
-                    self.console.print(f"  [dim]File:[/dim] {filename}")
-                    self.console.print(
-                        f"  [yellow]English audio:[/yellow] {'YES' if has_eng_audio else 'NO'}"
-                    )
-                    self.console.print(
-                        f"  [yellow]English subs:[/yellow] {'YES' if has_eng_subs else 'NO'}"
-                    )
-
-                    # Ask user what to do (default is No when pressing Enter)
-                    view_alternatives = Confirm.ask(
-                        "\n[bold cyan]View alternative releases?[/bold cyan]",
-                        default=False,
-                    )
-
-                    if view_alternatives:
-                        # Get releases
-                        releases = self.get_movie_releases(movie_id, quality_profile_id)
-                        selected_release = self.display_releases_and_select(
-                            releases, movie_title, file_path
-                        )
-
-                        if selected_release and not dry_run:
-                            # Delete current file
-                            self.console.print(
-                                "[yellow]Deleting current file...[/yellow]"
-                            )
-                            self._make_request(
-                                self.radarr_url,
-                                self.radarr_api,
-                                f"moviefile/{file_id}",
-                                method="DELETE",
-                                auth=self.radarr_http_auth,
-                            )
-
-                            # Download selected release
-                            self.download_release(
-                                self.radarr_url,
-                                self.radarr_api,
-                                selected_release,
-                                is_sonarr=False,
-                            )
-                        elif selected_release and dry_run:
-                            self.console.print(
-                                "[dim]DRY RUN: Would download selected release[/dim]"
-                            )
-                    else:
-                        # User said No - save to cache to skip this file next time
-                        self._add_skipped_file(file_path)
-                        self.save_caches()
-                        self.console.print(
-                            "[yellow]Marked to skip permanently[/yellow]"
-                        )
-                else:
-                    # Non-interactive mode - original behavior
-                    print(f"  X {movie_title}")
-                    print(f"     File: {filename}")
-                    print(
-                        f"     English audio: {has_eng_audio}, English subs: {has_eng_subs}"
-                    )
-
-                    if not dry_run:
-                        self._delete_file_and_trigger_search(
-                            url=self.radarr_url,
-                            api_key=self.radarr_api,
-                            file_endpoint=f"moviefile/{file_id}",
-                            auth=self.radarr_http_auth,
-                            search_payload={
-                                "name": "MoviesSearch",
-                                "movieIds": [movie_id],
-                            },
-                            trigger_message="Triggering movie search...",
-                        )
-                    else:
-                        print("     [DRY RUN] Would delete and re-download")
-            else:
-                # File is OK - add to cache
-                self._add_good_file(file_path)
-                self.save_caches()
-
-                if self.interactive:
-                    self.console.print(f"[green]OK[/green] {movie_title}")
-                else:
-                    print(f"  OK {movie_title}")
+            self._process_radarr_movie(movie, dry_run=dry_run)

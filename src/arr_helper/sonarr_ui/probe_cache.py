@@ -181,9 +181,10 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def probe_file(file_path: str) -> ProbeInfo:
-    """Return dict with codecs, resolution, bitrates, HDR, languages, size."""
-    info: ProbeInfo = {
+def _empty_probe_info(size_bytes: int = 0) -> ProbeInfo:
+    """Create a blank probe payload with an optional known file size."""
+
+    return {
         "video_codec": "",
         "video_resolution": "",
         "video_bitrate": "",
@@ -192,127 +193,167 @@ def probe_file(file_path: str) -> ProbeInfo:
         "hdr": "",
         "audio_langs": [],
         "sub_langs": [],
-        "size_bytes": 0,
+        "size_bytes": size_bytes,
     }
-    with contextlib.suppress(OSError):
-        info["size_bytes"] = os.path.getsize(file_path)
 
-    # check cache — keyed by path, invalidated if size changed or fields missing
+
+def _cached_probe_hit(file_path: str, size_bytes: int) -> ProbeInfo | None:
+    """Return a valid cached probe entry when the size still matches."""
+
     with _probe_cache_lock:
         cached = _probe_cache.get(file_path)
     if (
         cached
-        and cached.get("size_bytes") == info["size_bytes"]
+        and cached.get("size_bytes") == size_bytes
         and cached.get("_probe_ok") is True
     ):
         return cached
+    return None
+
+
+def _run_ffprobe(file_path: str) -> dict[str, object] | None:
+    """Run ffprobe and parse its JSON payload."""
+
+    cmd = [
+        _ffprobe_path or "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+        file_path,
+    ]
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=creationflags,
+    )
+    if result.returncode != 0:
+        return None
+    return cast("dict[str, object]", json.loads(result.stdout))
+
+
+def _stream_tags(stream: dict[str, object]) -> dict[str, object]:
+    """Return one stream's tags payload as a plain dictionary."""
+
+    tags_obj = stream.get("tags", {})
+    return cast("dict[str, object]", tags_obj) if isinstance(tags_obj, dict) else {}
+
+
+def _stream_side_data(stream: dict[str, object]) -> list[dict[str, object]]:
+    """Return one stream's side-data payload as a plain list."""
+
+    side_data_obj = stream.get("side_data_list", [])
+    return (
+        cast("list[dict[str, object]]", side_data_obj)
+        if isinstance(side_data_obj, list)
+        else []
+    )
+
+
+def _apply_video_probe_data(parsed: ProbeInfo, stream: dict[str, object]) -> None:
+    """Populate video metadata from the first video stream."""
+
+    parsed["video_codec"] = str(stream.get("codec_name", "")).upper()
+    width = _as_int(stream.get("width", 0))
+    height = _as_int(stream.get("height", 0))
+    if width and height:
+        parsed["video_resolution"] = f"{width}x{height}"
+    video_bitrate = _as_int(stream.get("bit_rate", 0))
+    if video_bitrate:
+        parsed["video_bitrate"] = f"{video_bitrate // 1000} kbps"
+    color_transfer = str(stream.get("color_transfer", ""))
+    color_space = str(stream.get("color_space", ""))
+    side_data = _stream_side_data(stream)
+    has_hdr_transfer = color_transfer in ("smpte2084", "arib-std-b67")
+    has_hdr_space = color_space in ("bt2020nc", "bt2020c")
+    has_dovi = any(
+        str(entry.get("side_data_type", ""))
+        in ("DOVI configuration record", "Dolby Vision configuration")
+        for entry in side_data
+    )
+    if has_dovi:
+        parsed["hdr"] = "DV"
+    elif has_hdr_transfer or has_hdr_space:
+        parsed["hdr"] = "HDR"
+    else:
+        parsed["hdr"] = "SDR"
+
+
+def _apply_audio_probe_data(parsed: ProbeInfo, stream: dict[str, object]) -> None:
+    """Populate audio metadata from one audio stream."""
+
+    if not parsed["audio_codec"]:
+        parsed["audio_codec"] = str(stream.get("codec_name", "")).upper()
+        audio_bitrate = _as_int(stream.get("bit_rate", 0))
+        if audio_bitrate:
+            parsed["audio_bitrate"] = f"{audio_bitrate // 1000} kbps"
+    language = str(_stream_tags(stream).get("language", ""))
+    if language:
+        parsed["audio_langs"].append(language)
+
+
+def _apply_subtitle_probe_data(parsed: ProbeInfo, stream: dict[str, object]) -> None:
+    """Append subtitle language metadata from one subtitle stream."""
+
+    language = str(_stream_tags(stream).get("language", ""))
+    if language:
+        parsed["sub_langs"].append(language)
+
+
+def _parse_probe_payload(data: dict[str, object], *, size_bytes: int) -> ProbeInfo:
+    """Convert one ffprobe payload into the cached probe structure."""
+
+    parsed = _empty_probe_info(size_bytes)
+    streams_obj = data.get("streams", [])
+    streams = (
+        cast("list[dict[str, object]]", streams_obj)
+        if isinstance(streams_obj, list)
+        else []
+    )
+    for stream in streams:
+        codec_type = str(stream.get("codec_type", ""))
+        if codec_type == "video" and not parsed["video_codec"]:
+            _apply_video_probe_data(parsed, stream)
+            continue
+        if codec_type == "audio":
+            _apply_audio_probe_data(parsed, stream)
+            continue
+        if codec_type == "subtitle":
+            _apply_subtitle_probe_data(parsed, stream)
+
+    if not parsed["video_bitrate"]:
+        format_info_obj = data.get("format", {})
+        format_info = (
+            cast("dict[str, object]", format_info_obj)
+            if isinstance(format_info_obj, dict)
+            else {}
+        )
+        fmt_bitrate = _as_int(format_info.get("bit_rate", 0))
+        if fmt_bitrate:
+            parsed["video_bitrate"] = f"{fmt_bitrate // 1000} kbps"
+    return parsed
+
+
+def probe_file(file_path: str) -> ProbeInfo:
+    """Return dict with codecs, resolution, bitrates, HDR, languages, size."""
+    info = _empty_probe_info()
+    with contextlib.suppress(OSError):
+        info["size_bytes"] = os.path.getsize(file_path)
+
+    cached = _cached_probe_hit(file_path, info["size_bytes"])
+    if cached is not None:
+        return cached
 
     try:
-        cmd = [
-            _ffprobe_path or "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_format",
-            file_path,
-        ]
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            creationflags=creationflags,
-        )
-        if result.returncode != 0:
+        data = _run_ffprobe(file_path)
+        if data is None:
             return info
-        data = cast("dict[str, object]", json.loads(result.stdout))
-
-        parsed: ProbeInfo = {
-            "video_codec": "",
-            "video_resolution": "",
-            "video_bitrate": "",
-            "audio_codec": "",
-            "audio_bitrate": "",
-            "hdr": "",
-            "audio_langs": [],
-            "sub_langs": [],
-            "size_bytes": info["size_bytes"],
-        }
-
-        streams_obj = data.get("streams", [])
-        streams = (
-            cast("list[dict[str, object]]", streams_obj)
-            if isinstance(streams_obj, list)
-            else []
-        )
-        for stream in streams:
-            codec_type = str(stream.get("codec_type", ""))
-            tags_obj = stream.get("tags", {})
-            tags = (
-                cast("dict[str, object]", tags_obj)
-                if isinstance(tags_obj, dict)
-                else {}
-            )
-            lang = str(tags.get("language", ""))
-            if codec_type == "video" and not parsed["video_codec"]:
-                parsed["video_codec"] = str(stream.get("codec_name", "")).upper()
-                w = _as_int(stream.get("width", 0))
-                h = _as_int(stream.get("height", 0))
-                if w and h:
-                    parsed["video_resolution"] = f"{w}x{h}"
-                vbr = _as_int(stream.get("bit_rate", 0))
-                if vbr:
-                    parsed["video_bitrate"] = f"{vbr // 1000} kbps"
-                color_transfer = str(stream.get("color_transfer", ""))
-                color_space = str(stream.get("color_space", ""))
-                side_data_obj = stream.get("side_data_list", [])
-                side_data = (
-                    cast("list[dict[str, object]]", side_data_obj)
-                    if isinstance(side_data_obj, list)
-                    else []
-                )
-                has_hdr_transfer = color_transfer in ("smpte2084", "arib-std-b67")
-                has_hdr_space = color_space in ("bt2020nc", "bt2020c")
-                has_dovi = (
-                    any(
-                        str(sd.get("side_data_type", ""))
-                        in ("DOVI configuration record", "Dolby Vision configuration")
-                        for sd in side_data
-                    )
-                    if side_data
-                    else False
-                )
-                if has_dovi:
-                    parsed["hdr"] = "DV"
-                elif has_hdr_transfer or has_hdr_space:
-                    parsed["hdr"] = "HDR"
-                else:
-                    parsed["hdr"] = "SDR"
-            elif codec_type == "audio":
-                if not parsed["audio_codec"]:
-                    parsed["audio_codec"] = str(stream.get("codec_name", "")).upper()
-                    abr = _as_int(stream.get("bit_rate", 0))
-                    if abr:
-                        parsed["audio_bitrate"] = f"{abr // 1000} kbps"
-                if lang:
-                    parsed["audio_langs"].append(lang)
-            elif codec_type == "subtitle":
-                if lang:
-                    parsed["sub_langs"].append(lang)
-
-        if not parsed["video_bitrate"]:
-            format_info_obj = data.get("format", {})
-            format_info = (
-                cast("dict[str, object]", format_info_obj)
-                if isinstance(format_info_obj, dict)
-                else {}
-            )
-            fmt_br = _as_int(format_info.get("bit_rate", 0))
-            if fmt_br:
-                parsed["video_bitrate"] = f"{fmt_br // 1000} kbps"
+        parsed = _parse_probe_payload(data, size_bytes=info["size_bytes"])
     except Exception:
         return info
 
