@@ -37,7 +37,9 @@ def ensure_venv(repo_root: Path) -> int:
         return 1
 
     return subprocess.run(
-        [python_exe, str(setup_script)], cwd=repo_root, check=False
+        [python_exe, str(setup_script)],
+        cwd=repo_root,
+        check=False,
     ).returncode
 
 
@@ -51,16 +53,13 @@ def ensure_test_dependencies(repo_root: Path) -> int:
         print("Run: python scripts\\windows\\setup_env.py", file=sys.stderr)
         return 1
 
-    has_pytest = (
-        subprocess.run(
-            [str(python_exe), "-c", "import pytest"],
-            cwd=repo_root,
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode
-        == 0
-    )
+    has_pytest = subprocess.run(
+        [str(python_exe), "-c", "import pytest"],
+        cwd=repo_root,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
     if has_pytest:
         return 0
 
