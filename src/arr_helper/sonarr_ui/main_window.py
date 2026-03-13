@@ -1,10 +1,11 @@
 """Main Qt window for Sonarr UI helper."""
 
+from __future__ import annotations
+
 import os
 import shutil
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtGui import (
@@ -38,7 +39,6 @@ from threep_commons.desktop import open_path_in_default_app
 from threep_commons.settings import QSettingsValueStore
 
 from ..constants import APP_IDENTITY
-from .api import SonarrAPI
 from .dialogs.add_show import AddShowDialog
 from .dialogs.manual_search import ManualSearchDialog
 from .helpers import fmt_size
@@ -56,18 +56,32 @@ from .roles import (
 )
 from .workers import ApiActionWorker, LoadWorker
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ..media_checker.config import ConfigMap
+    from .api import JsonDict, SonarrAPI
+    from .workers import LoadedSeriesEntry
+
+_CONTEXT_MENU_POLICY = Qt.ContextMenuPolicy.CustomContextMenu
+_KEY_DELETE = Qt.Key.Key_Delete
+_KEY_RETURN = Qt.Key.Key_Return
+_WAIT_CURSOR = Qt.CursorShape.WaitCursor
+_MSG_YES = QMessageBox.StandardButton.Yes
+_MSG_NO = QMessageBox.StandardButton.No
+
 
 class MainWindow(QMainWindow):
     def __init__(
         self,
         api: SonarrAPI,
         loader_api: SonarrAPI | None = None,
-        settings: dict | None = None,
-    ):
+        settings: ConfigMap | None = None,
+    ) -> None:
         super().__init__()
         self.api = api
         self.loader_api = loader_api or api
-        self.cfg = settings or {}
+        self.cfg: ConfigMap = settings or {}
         self.preferences_store = QSettingsValueStore.from_identity(APP_IDENTITY)
         self._settings = self.preferences_store
         self._ui_settings = QSettingsValueStore(
@@ -90,24 +104,24 @@ class MainWindow(QMainWindow):
         # toolbar (with mnemonics via &)
         toolbar = QHBoxLayout()
         btn_expand_all = QPushButton("Expand &All")
-        btn_expand_all.clicked.connect(self._expand_all)
+        _ = btn_expand_all.clicked.connect(self._expand_all)
         btn_expand_series = QPushButton("Expand &Series")
-        btn_expand_series.clicked.connect(self._expand_series)
+        _ = btn_expand_series.clicked.connect(self._expand_series)
         btn_collapse_seasons = QPushButton("Collapse S&easons")
-        btn_collapse_seasons.clicked.connect(self._collapse_all_seasons)
+        _ = btn_collapse_seasons.clicked.connect(self._collapse_all_seasons)
         btn_collapse_series = QPushButton("&Collapse Series")
-        btn_collapse_series.clicked.connect(self._collapse_all_series)
+        _ = btn_collapse_series.clicked.connect(self._collapse_all_series)
         btn_add_show = QPushButton("A&dd Show")
-        btn_add_show.clicked.connect(self._add_show)
+        _ = btn_add_show.clicked.connect(self._add_show)
         toolbar.addWidget(btn_expand_all)
         toolbar.addWidget(btn_expand_series)
         toolbar.addWidget(btn_collapse_seasons)
         toolbar.addWidget(btn_collapse_series)
         btn_refresh = QPushButton("&Refresh")
-        btn_refresh.clicked.connect(self._refresh)
+        _ = btn_refresh.clicked.connect(self._refresh)
         self.chk_show_missing = QCheckBox("Show &Missing")
         self.chk_show_missing.setChecked(False)
-        self.chk_show_missing.toggled.connect(self._toggle_missing)
+        _ = self.chk_show_missing.toggled.connect(self._toggle_missing)
         toolbar.addWidget(self.chk_show_missing)
         toolbar.addStretch()
         toolbar.addWidget(btn_add_show)
@@ -118,9 +132,9 @@ class MainWindow(QMainWindow):
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
         self.tree.setAnimated(False)
-        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self._on_context_menu)
-        self.tree.doubleClicked.connect(self._on_double_click)
+        self.tree.setContextMenuPolicy(_CONTEXT_MENU_POLICY)
+        _ = self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        _ = self.tree.doubleClicked.connect(self._on_double_click)
 
         self.model = QStandardItemModel()
         self._columns = [
@@ -154,19 +168,23 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
 
         # keyboard: Delete key
-        del_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.tree)
-        del_shortcut.activated.connect(self._on_delete)
+        del_shortcut = QShortcut(QKeySequence(_KEY_DELETE), self.tree)
+        _ = del_shortcut.activated.connect(self._on_delete)
 
         # keyboard: Enter/Return to activate
-        enter_shortcut = QShortcut(QKeySequence(Qt.Key_Return), self.tree)
-        enter_shortcut.activated.connect(self._on_enter)
+        enter_shortcut = QShortcut(QKeySequence(_KEY_RETURN), self.tree)
+        _ = enter_shortcut.activated.connect(self._on_enter)
 
         # cache quality profiles for name lookup
-        self._quality_profiles = []
-        self._qp_map = {}  # id -> name
+        self._quality_profiles: list[JsonDict] = []
+        self._qp_map: dict[int, str] = {}
         try:
             self._quality_profiles = api.get_quality_profiles()
-            self._qp_map = {p["id"]: p["name"] for p in self._quality_profiles}
+            self._qp_map = {
+                int(profile["id"]): str(profile["name"])
+                for profile in self._quality_profiles
+                if isinstance(profile.get("id"), int) and "name" in profile
+            }
         except Exception:
             pass
 
@@ -181,108 +199,124 @@ class MainWindow(QMainWindow):
     def _ui_key(name: str) -> str:
         return f"ui/sonarr_ui/{name}"
 
-    def _build_menu_bar(self):
+    @staticmethod
+    def _item_role_str(item: QStandardItem, role: int) -> str:
+        value = item.data(role)
+        return str(value) if isinstance(value, str) else ""
+
+    @staticmethod
+    def _item_role_int(item: QStandardItem, role: int) -> int | None:
+        value = item.data(role)
+        return value if isinstance(value, int) else None
+
+    @staticmethod
+    def _item_role_bool(item: QStandardItem, role: int) -> bool:
+        return bool(item.data(role))
+
+    def _build_menu_bar(self) -> None:
         mb = self.menuBar()
 
         # File menu
         file_menu = mb.addMenu("&File")
         act = file_menu.addAction("&Add Show")
         act.setShortcut(QKeySequence("Ctrl+N"))
-        act.triggered.connect(self._add_show)
+        _ = act.triggered.connect(self._add_show)
         file_menu.addSeparator()
         act = file_menu.addAction("E&xit")
         act.setShortcuts([QKeySequence("Ctrl+Q"), QKeySequence("Alt+X")])
-        act.triggered.connect(self.close)
+        _ = act.triggered.connect(self.close)
 
         # View menu
         view_menu = mb.addMenu("&View")
         act = view_menu.addAction("&Refresh")
         act.setShortcut(QKeySequence("F5"))
-        act.triggered.connect(self._refresh)
+        _ = act.triggered.connect(self._refresh)
         act = view_menu.addAction("&Clear Cache && Refresh")
         act.setShortcut(QKeySequence("Ctrl+F5"))
-        act.triggered.connect(self._clear_cache_and_refresh)
+        _ = act.triggered.connect(self._clear_cache_and_refresh)
         view_menu.addSeparator()
         act = view_menu.addAction("E&xpand All")
         act.setShortcut(QKeySequence("Ctrl+E"))
-        act.triggered.connect(self._expand_all)
+        _ = act.triggered.connect(self._expand_all)
         act = view_menu.addAction("Expand &Series")
         act.setShortcut(QKeySequence("Ctrl+Shift+E"))
-        act.triggered.connect(self._expand_series)
+        _ = act.triggered.connect(self._expand_series)
         act = view_menu.addAction("Collapse S&easons")
         act.setShortcut(QKeySequence("Ctrl+W"))
-        act.triggered.connect(self._collapse_all_seasons)
+        _ = act.triggered.connect(self._collapse_all_seasons)
         act = view_menu.addAction("Co&llapse All")
         act.setShortcut(QKeySequence("Ctrl+Shift+W"))
-        act.triggered.connect(self._collapse_all_series)
+        _ = act.triggered.connect(self._collapse_all_series)
         view_menu.addSeparator()
         self.act_show_missing = QAction("Show &Missing", self)
         self.act_show_missing.setCheckable(True)
         self.act_show_missing.setChecked(False)
         self.act_show_missing.setShortcut(QKeySequence("Ctrl+M"))
-        self.act_show_missing.toggled.connect(self._toggle_missing_from_menu)
+        _ = self.act_show_missing.toggled.connect(self._toggle_missing_from_menu)
         view_menu.addAction(self.act_show_missing)
         act = view_menu.addAction("&Fit Columns")
-        act.triggered.connect(self._fit_columns)
+        _ = act.triggered.connect(self._fit_columns)
         act = view_menu.addAction("Reset &View")
         act.setShortcut(QKeySequence("Ctrl+Shift+R"))
-        act.triggered.connect(self._reset_view_settings)
+        _ = act.triggered.connect(self._reset_view_settings)
 
         # Actions menu
         actions_menu = mb.addMenu("&Actions")
         act = actions_menu.addAction("&Monitor")
         act.setShortcut(QKeySequence("M"))
-        act.triggered.connect(lambda: self._ctx_on_selected("monitor"))
+        _ = act.triggered.connect(lambda: self._ctx_on_selected("monitor"))
         act = actions_menu.addAction("&Auto Search")
         act.setShortcut(QKeySequence("S"))
-        act.triggered.connect(lambda: self._ctx_on_selected("auto_search"))
+        _ = act.triggered.connect(lambda: self._ctx_on_selected("auto_search"))
         act = actions_menu.addAction("Ma&nual Search")
         act.setShortcut(QKeySequence("N"))
-        act.triggered.connect(lambda: self._ctx_on_selected("manual_search"))
+        _ = act.triggered.connect(lambda: self._ctx_on_selected("manual_search"))
         actions_menu.addSeparator()
         act = actions_menu.addAction("Change &Quality Profile")
         act.setShortcut(QKeySequence("Q"))
-        act.triggered.connect(lambda: self._ctx_on_selected("change_quality_profile"))
+        _ = act.triggered.connect(
+            lambda: self._ctx_on_selected("change_quality_profile")
+        )
         actions_menu.addSeparator()
         act = actions_menu.addAction("&Unmonitor")
         act.setShortcut(QKeySequence("U"))
-        act.triggered.connect(lambda: self._ctx_on_selected("unmonitor"))
+        _ = act.triggered.connect(lambda: self._ctx_on_selected("unmonitor"))
         act = actions_menu.addAction("&Delete from Disk")
         act.setShortcut(QKeySequence("D"))
-        act.triggered.connect(lambda: self._ctx_on_selected("delete_from_disk"))
+        _ = act.triggered.connect(lambda: self._ctx_on_selected("delete_from_disk"))
         act = actions_menu.addAction("Unmonitor && De&lete")
         act.setShortcut(QKeySequence("Ctrl+Delete"))
-        act.triggered.connect(lambda: self._ctx_on_selected("unmonitor_delete"))
+        _ = act.triggered.connect(lambda: self._ctx_on_selected("unmonitor_delete"))
         actions_menu.addSeparator()
         act = actions_menu.addAction("&Open in Explorer")
         act.setShortcut(QKeySequence("O"))
-        act.triggered.connect(self._on_enter)
+        _ = act.triggered.connect(self._on_enter)
 
         # Tools menu
         tools_menu = mb.addMenu("&Tools")
         act = tools_menu.addAction("Edit &.ini File")
-        act.triggered.connect(self._edit_ini_file)
+        _ = act.triggered.connect(self._edit_ini_file)
 
         # Help menu
         help_menu = mb.addMenu("&Help")
         act = help_menu.addAction("&Help")
         act.setShortcut(QKeySequence("F1"))
-        act.triggered.connect(self._show_help)
+        _ = act.triggered.connect(self._show_help)
 
-    def _toggle_missing_from_menu(self, checked: bool):
+    def _toggle_missing_from_menu(self, checked: bool) -> None:
         """Sync the menu checkbox with the toolbar checkbox."""
         self.chk_show_missing.setChecked(checked)
 
-    def _reset_view_settings(self):
+    def _reset_view_settings(self) -> None:
         reply = QMessageBox.question(
             self,
             "Reset View",
             "Reset all saved UI view settings to defaults?\n"
             "This clears saved column widths, splitter positions, and other stored view state.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            _MSG_YES | _MSG_NO,
+            _MSG_NO,
         )
-        if reply != QMessageBox.Yes:
+        if reply != _MSG_YES:
             return
 
         self._ui_settings.clear_all()
@@ -293,7 +327,7 @@ class MainWindow(QMainWindow):
         self._apply_default_column_widths()
         self.status_label.setText("View settings reset to defaults")
 
-    def _edit_ini_file(self):
+    def _edit_ini_file(self) -> None:
         self._settings.sync()
         ini_path = Path(self.preferences_store.file_name())
         try:
@@ -305,7 +339,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to open settings file:\n{e}")
             self.status_label.setText("Failed to open settings file")
 
-    def _ctx_on_selected(self, action_name: str):
+    def _ctx_on_selected(self, action_name: str) -> None:
         """Dispatch a context-menu action on the currently selected tree item."""
         if not self._ensure_action_idle():
             return
@@ -313,7 +347,7 @@ class MainWindow(QMainWindow):
         if not item:
             self.status_label.setText("No item selected")
             return
-        node_type = item.data(ROLE_NODE_TYPE)
+        node_type = self._item_role_str(item, ROLE_NODE_TYPE)
         if action_name == "monitor":
             self._ctx_monitor(item, node_type)
         elif action_name == "auto_search":
@@ -329,7 +363,7 @@ class MainWindow(QMainWindow):
         elif action_name == "unmonitor_delete":
             self._ctx_unmonitor_delete(item, node_type)
 
-    def _show_help(self):
+    def _show_help(self) -> None:
         help_text = (
             "<h2>Keyboard Shortcuts</h2>"
             "<table cellpadding='4' cellspacing='0'>"
@@ -380,10 +414,10 @@ class MainWindow(QMainWindow):
 
     # ── populate tree ───────────────────────────────────────────
 
-    def _on_progress(self, text: str):
+    def _on_progress(self, text: str) -> None:
         self.status_label.setText(text)
 
-    def _on_worker_progress(self, worker: LoadWorker, text: str):
+    def _on_worker_progress(self, worker: LoadWorker, text: str) -> None:
         if worker is not self.worker:
             return
         if text.startswith("Error:"):
@@ -392,20 +426,27 @@ class MainWindow(QMainWindow):
             self._worker_warning_count += 1
         self._on_progress(text)
 
-    def _on_worker_series_ready(self, worker: LoadWorker, series_list: list):
+    def _on_worker_series_ready(
+        self,
+        worker: LoadWorker,
+        series_list: list[LoadedSeriesEntry],
+    ) -> None:
         if worker is not self.worker:
             return
         self._on_data_loaded(series_list)
 
-    def _start_worker(self):
+    def _start_worker(self) -> None:
         self._last_worker_error = ""
         self._worker_warning_count = 0
         worker = LoadWorker(self.loader_api)
-        worker.progress.connect(
-            lambda text, w=worker: self._on_worker_progress(w, text)
+        _ = worker.progress.connect(
+            lambda text, w=worker: self._on_worker_progress(w, str(text))
         )
-        worker.series_ready.connect(
-            lambda data, w=worker: self._on_worker_series_ready(w, data)
+        _ = worker.series_ready.connect(
+            lambda data, w=worker: self._on_worker_series_ready(
+                w,
+                cast("list[LoadedSeriesEntry]", data),
+            )
         )
         self.worker = worker
         worker.start()
@@ -437,8 +478,8 @@ class MainWindow(QMainWindow):
     def _run_api_action(
         self,
         start_text: str,
-        action: Callable[[], Any],
-        on_success: Callable[[Any], None],
+        action: Callable[[], object],
+        on_success: Callable[[object], None],
         error_text: str,
     ) -> bool:
         if not self._ensure_action_idle():
@@ -447,9 +488,11 @@ class MainWindow(QMainWindow):
         worker = ApiActionWorker(action)
         self.action_worker = worker
         self.status_label.setText(start_text)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(_WAIT_CURSOR)
 
-        def _on_done(result: Any, error: Any, w: ApiActionWorker = worker):
+        def _on_done(
+            result: object, error: object, w: ApiActionWorker = worker
+        ) -> None:
             if self.action_worker is not w:
                 return
             self.action_worker = None
@@ -463,21 +506,21 @@ class MainWindow(QMainWindow):
             finally:
                 w.deleteLater()
 
-        worker.finished_action.connect(_on_done)
+        _ = worker.finished_action.connect(_on_done)
         worker.start()
         return True
 
     @staticmethod
-    def _make_row(cols: int) -> list:
+    def _make_row(cols: int) -> list[QStandardItem]:
         """Create a list of empty, non-editable QStandardItems."""
-        row = []
+        row: list[QStandardItem] = []
         for _ in range(cols):
             item = QStandardItem("")
             item.setEditable(False)
             row.append(item)
         return row
 
-    def _highlight_row(self, row: list, sub_langs: str):
+    def _highlight_row(self, row: list[QStandardItem], sub_langs: str) -> None:
         """Apply light red background if configured sub language is missing.
 
         highlight_missing_subs is a label that maps to english_language_codes,
@@ -485,11 +528,16 @@ class MainWindow(QMainWindow):
         english_language_codes = ["eng", "en", "english"] means any of those
         codes count as a match.
         """
-        hl = self.cfg.get("highlight_missing_subs", "").strip().lower()
+        hl = str(self.cfg.get("highlight_missing_subs", "")).strip().lower()
         if not hl:
             return
         # expand via the language codes array
-        codes = [c.lower() for c in self.cfg.get("english_language_codes", [hl])]
+        raw_codes = self.cfg.get("english_language_codes", [hl])
+        codes = (
+            [code.lower() for code in raw_codes if isinstance(code, str)]
+            if isinstance(raw_codes, list)
+            else [hl]
+        )
         if not codes:
             codes = [hl]
         langs = {lang.strip().lower() for lang in sub_langs.split(",") if lang.strip()}
@@ -807,7 +855,7 @@ class MainWindow(QMainWindow):
             mon_item.setText("Y" if monitored else "N")
 
     @staticmethod
-    def _clone_episode_payloads(raw_payloads: Any) -> list[dict]:
+    def _clone_episode_payloads(raw_payloads: object) -> list[dict]:
         payloads: list[dict] = []
         for ep in raw_payloads or []:
             if isinstance(ep, dict):

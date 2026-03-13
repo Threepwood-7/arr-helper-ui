@@ -1,6 +1,9 @@
 """Add-show dialog for Sonarr UI."""
 
+from __future__ import annotations
+
 import contextlib
+from typing import TYPE_CHECKING
 
 import requests
 from PySide6.QtCore import Qt
@@ -16,21 +19,23 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
-from ..api import SonarrAPI
+if TYPE_CHECKING:
+    from ..api import JsonDict, JsonList, SonarrAPI
 
 
 class AddShowDialog(QDialog):
     """Search for a show on Sonarr and add it."""
 
-    def __init__(self, parent, api: SonarrAPI):
+    def __init__(self, parent: QWidget | None, api: SonarrAPI) -> None:
         super().__init__(parent)
         self.api = api
         self.setWindowTitle("Add Show")
         pw = parent.width() if parent else 1000
         self.resize(int(pw * 0.7), 500)
-        self.added_series = None
+        self.added_series: JsonDict | None = None
 
         layout = QVBoxLayout(self)
 
@@ -56,18 +61,23 @@ class AddShowDialog(QDialog):
         layout.addLayout(options_row)
 
         # preload root folders and quality profiles
-        self._root_folders = []
-        self._quality_profiles = []
+        self._root_folders: JsonList = []
+        self._quality_profiles: JsonList = []
         try:
             self._root_folders = api.get_root_folders()
             for rf in self._root_folders:
-                self.combo_root.addItem(rf["path"], rf["path"])
+                path = str(rf.get("path", ""))
+                if path:
+                    self.combo_root.addItem(path, path)
         except Exception:
             pass
         try:
             self._quality_profiles = api.get_quality_profiles()
             for qp in self._quality_profiles:
-                self.combo_qp.addItem(qp["name"], qp["id"])
+                name = str(qp.get("name", ""))
+                profile_id = qp.get("id")
+                if name and isinstance(profile_id, int):
+                    self.combo_qp.addItem(name, profile_id)
         except Exception:
             pass
 
@@ -77,15 +87,18 @@ class AddShowDialog(QDialog):
         layout.addWidget(self.results_list)
 
         # add button
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Add Selected")
-        buttons.accepted.connect(self._add_selected)
-        buttons.rejected.connect(self.reject)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok_button.setText("Add Selected")
+        _ = buttons.accepted.connect(self._add_selected)
+        _ = buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self.lookup_results: list[dict] = []
+        self.lookup_results: JsonList = []
 
-    def _do_search(self):
+    def _do_search(self) -> None:
         term = self.search_input.text().strip()
         if not term:
             return
@@ -99,21 +112,22 @@ class AddShowDialog(QDialog):
 
         self.lookup_results = results
         for idx, r in enumerate(results):
-            title = r.get("title", "?")
-            year = r.get("year", "")
-            overview = (r.get("overview", "") or "")[:120]
-            status = r.get("status", "")
-            already = "id" in r and r.get("id", 0) > 0
+            title = str(r.get("title", "?"))
+            year = str(r.get("year", ""))
+            overview = str(r.get("overview", "") or "")[:120]
+            status = str(r.get("status", ""))
+            series_id = r.get("id", 0)
+            already = isinstance(series_id, int) and series_id > 0
             label = f"{title} ({year}) [{status}]"
             if already:
                 label += " [ALREADY IN SONARR]"
             if overview:
                 label += f"\n  {overview}"
             item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, idx)
+            item.setData(Qt.ItemDataRole.UserRole, idx)
             self.results_list.addItem(item)
 
-    def _add_selected(self):
+    def _add_selected(self) -> None:
         row = self.results_list.currentRow()
         if row < 0 or row >= len(self.lookup_results):
             QMessageBox.warning(self, "No Selection", "Please select a show first.")
@@ -122,7 +136,8 @@ class AddShowDialog(QDialog):
         lookup = self.lookup_results[row]
 
         # check if already added
-        if lookup.get("id", 0) > 0:
+        lookup_id = lookup.get("id", 0)
+        if isinstance(lookup_id, int) and lookup_id > 0:
             QMessageBox.information(
                 self, "Already Added", "This series is already in Sonarr."
             )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import requests
 from PySide6.QtWidgets import (
@@ -22,6 +22,32 @@ from PySide6.QtWidgets import (
 
 if TYPE_CHECKING:
     from ...media_checker.config import Config
+
+
+ConfigSection = dict[str, object]
+
+
+class ServiceConfig(TypedDict):
+    enabled: bool
+    url: str
+    api_key: str
+    http_basic_auth_username: str
+    http_basic_auth_password: str
+
+
+def _section(value: object) -> ConfigSection:
+    """Normalize arbitrary config sections to plain string-keyed dictionaries."""
+
+    return cast("ConfigSection", value) if isinstance(value, dict) else {}
+
+
+def _csv_codes(value: object) -> str:
+    """Render configured language codes as a comma-separated string."""
+
+    if not isinstance(value, list):
+        return "eng, en, english"
+    codes = [item for item in cast("list[object]", value) if isinstance(item, str)]
+    return ", ".join(codes or ["eng", "en", "english"])
 
 
 class _ServiceGroup(QGroupBox):
@@ -51,7 +77,7 @@ class _ServiceGroup(QGroupBox):
         layout.addRow("HTTP User", self.txt_http_user)
         layout.addRow("HTTP Password", self.txt_http_password)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ServiceConfig:
         return {
             "enabled": bool(self.chk_enabled.isChecked()),
             "url": str(self.txt_url.text() or "").strip(),
@@ -64,7 +90,11 @@ class _ServiceGroup(QGroupBox):
 
 
 class ArrSetupWizardDialog(QDialog):
-    def __init__(self, initial: dict[str, Any], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        initial: ConfigSection,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("arr-helper Setup Wizard")
         self.resize(760, 620)
@@ -76,9 +106,9 @@ class ArrSetupWizardDialog(QDialog):
             )
         )
 
-        sonarr = initial.get("sonarr", {}) if isinstance(initial, dict) else {}
-        radarr = initial.get("radarr", {}) if isinstance(initial, dict) else {}
-        settings = initial.get("settings", {}) if isinstance(initial, dict) else {}
+        sonarr = _section(initial.get("sonarr", {}))
+        radarr = _section(initial.get("radarr", {}))
+        settings = _section(initial.get("settings", {}))
 
         self.sonarr_group = _ServiceGroup(
             "Sonarr",
@@ -121,7 +151,7 @@ class ArrSetupWizardDialog(QDialog):
         self.chk_req_subs = QCheckBox("Require English subtitles")
         self.chk_req_subs.setChecked(bool(settings.get("require_english_subs", True)))
         self.txt_lang_codes = QLineEdit(
-            ", ".join(settings.get("english_language_codes", ["eng", "en", "english"]))
+            _csv_codes(settings.get("english_language_codes", ["eng", "en", "english"]))
         )
         self.txt_highlight = QLineEdit(
             str(settings.get("highlight_missing_subs", "") or "")
@@ -140,8 +170,8 @@ class ArrSetupWizardDialog(QDialog):
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
+        _ = buttons.accepted.connect(self._on_accept)
+        _ = buttons.rejected.connect(self.reject)
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(buttons)
@@ -151,7 +181,7 @@ class ArrSetupWizardDialog(QDialog):
         sonarr = self.sonarr_group.to_dict()
         radarr = self.radarr_group.to_dict()
 
-        enabled = []
+        enabled: list[tuple[str, ServiceConfig]] = []
         if sonarr["enabled"]:
             enabled.append(("sonarr", sonarr))
         if radarr["enabled"]:
@@ -174,7 +204,7 @@ class ArrSetupWizardDialog(QDialog):
                 return
         self.accept()
 
-    def to_config(self) -> dict[str, Any]:
+    def to_config(self) -> ConfigSection:
         lang_codes = [
             token.strip()
             for token in str(self.txt_lang_codes.text() or "").split(",")
@@ -202,7 +232,7 @@ class ArrSetupWizardDialog(QDialog):
         self._test_service_connection("Radarr", self.radarr_group.to_dict())
 
     def _test_service_connection(
-        self, service_name: str, service: dict[str, Any]
+        self, service_name: str, service: ServiceConfig
     ) -> None:
         if not bool(service.get("enabled", True)):
             QMessageBox.information(
@@ -233,7 +263,7 @@ class ArrSetupWizardDialog(QDialog):
         try:
             response = requests.get(endpoint, headers=headers, auth=auth, timeout=10)
             response.raise_for_status()
-            payload = response.json() if response.text else {}
+            payload = cast("ConfigSection", response.json()) if response.text else {}
             app_name = str(payload.get("appName", service_name))
             version = str(payload.get("version", "unknown"))
             QMessageBox.information(

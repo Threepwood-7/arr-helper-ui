@@ -6,7 +6,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from threep_commons.config_helpers import (
     coerce_bool as _shared_coerce_bool,
@@ -24,20 +24,12 @@ from threep_commons.settings import QSettingsValueStore
 
 from ..constants import APP_IDENTITY, SETTINGS_APP_NAME
 from ..core.locking import (
-    acquire_lock_file as _core_acquire_lock_file,
-)
-from ..core.locking import (
-    pid_is_running as _core_pid_is_running,
-)
-from ..core.locking import (
-    release_lock_file as _core_release_lock_file,
-)
-from ..core.locking import (
     write_json_atomic_locked as _core_write_json_atomic_locked,
 )
 from ..core.paths import get_app_cache_dir
 
 APP_SLUG = "arr_helper"
+ConfigMap = dict[str, object]
 
 SECRET_ENV_TO_KEYS = (
     ("ARR_HELPER_SONARR_API_KEY", ("sonarr", "api_key")),
@@ -138,21 +130,7 @@ CONFIG_SCHEMA: tuple[tuple[str, type, Any], ...] = (
 )
 
 
-def _pid_is_running(pid: int) -> bool:
-    return _core_pid_is_running(pid)
-
-
-def _acquire_lock_file(lock_path: str, timeout_s: float = 10.0) -> tuple[int, str]:
-    return _core_acquire_lock_file(
-        lock_path, timeout_s=timeout_s, pid_checker=_pid_is_running
-    )
-
-
-def _release_lock_file(lock_path: str, lock_fd: int, token: str) -> None:
-    _core_release_lock_file(lock_path, lock_fd, token)
-
-
-def _write_json_atomic_locked(path: str, payload: dict, indent: int = 2) -> None:
+def _write_json_atomic_locked(path: str, payload: ConfigMap, indent: int = 2) -> None:
     _core_write_json_atomic_locked(path, payload, indent=indent)
 
 
@@ -166,9 +144,11 @@ def _coerce_bool(value: Any, default: bool) -> bool:
 
 def _coerce_str_list(value: Any, default: list[str]) -> list[str]:
     if isinstance(value, list):
-        return [str(v).strip() for v in value if str(v).strip()]
+        values = cast("list[object]", value)
+        return [str(item).strip() for item in values if str(item).strip()]
     if isinstance(value, tuple):
-        return [str(v).strip() for v in value if str(v).strip()]
+        values = cast("tuple[object, ...]", value)
+        return [str(item).strip() for item in values if str(item).strip()]
     if isinstance(value, str):
         tokens = [item.strip() for item in value.split(",")]
         return [item for item in tokens if item]
@@ -203,6 +183,12 @@ def _settings_file_path(settings: QSettingsValueStore) -> str:
     return str(Path.cwd() / f"{SETTINGS_APP_NAME}.ini")
 
 
+def _section(value: object) -> ConfigMap:
+    """Normalize a nested config section to a plain string-keyed mapping."""
+
+    return cast("ConfigMap", value) if isinstance(value, dict) else {}
+
+
 class Config:
     """Load and manage configuration from the shared settings store."""
 
@@ -215,7 +201,7 @@ class Config:
         self.user_cache_path = os.path.join(cache_dir, "z_user.cache")
         self.files_cache_path = os.path.join(cache_dir, "z_files.cache")
 
-    def _load_config(self) -> dict[str, Any]:
+    def _load_config(self) -> ConfigMap:
         merged = copy.deepcopy(DEFAULT_CONFIG)
         for key, value_type, default in CONFIG_SCHEMA:
             raw = self._settings.value(key, default)
@@ -224,29 +210,29 @@ class Config:
         self._apply_secret_env_overrides(merged)
         return merged
 
-    def reload(self) -> dict[str, Any]:
+    def reload(self) -> ConfigMap:
         self.config = self._load_config()
         return self.config
 
-    def _apply_secret_env_overrides(self, config: dict[str, Any]) -> None:
+    def _apply_secret_env_overrides(self, config: ConfigMap) -> None:
         for env_name, key_path in SECRET_ENV_TO_KEYS:
             env_value = os.environ.get(env_name, "")
             if env_value:
                 _shared_set_nested_value(config, key_path, env_value)
 
-    def save(self, new_config: dict[str, Any] | None = None) -> None:
+    def save(self, new_config: ConfigMap | None = None) -> None:
         if new_config is not None:
             self.config = _shared_deep_merge_dicts(
                 copy.deepcopy(DEFAULT_CONFIG), new_config
             )
         for key, value_type, default in CONFIG_SCHEMA:
             path = _shared_schema_key_path(key)
-            current: Any = self.config
+            current: object = self.config
             for part in path:
                 if not isinstance(current, dict):
                     current = default
                     break
-                current = current.get(part, default)
+                current = cast("ConfigMap", current).get(part, default)
             value = _coerce_value(current, value_type, default)
             self._settings.set_value(key, value)
         self._settings.sync()
@@ -255,15 +241,11 @@ class Config:
 
     def get_missing_required(self, context: str = "media_checker") -> list[str]:
         errors: list[str] = []
-        sonarr = self.config.get("sonarr", {}) if isinstance(self.config, dict) else {}
-        radarr = self.config.get("radarr", {}) if isinstance(self.config, dict) else {}
+        sonarr = _section(self.config.get("sonarr", {}))
+        radarr = _section(self.config.get("radarr", {}))
 
-        sonarr_enabled = (
-            bool(sonarr.get("enabled", True)) if isinstance(sonarr, dict) else False
-        )
-        radarr_enabled = (
-            bool(radarr.get("enabled", True)) if isinstance(radarr, dict) else False
-        )
+        sonarr_enabled = bool(sonarr.get("enabled", True))
+        radarr_enabled = bool(radarr.get("enabled", True))
 
         if context == "sonarr_ui":
             if not sonarr_enabled:
@@ -280,9 +262,6 @@ class Config:
 
         for name, section, enabled in targets:
             if not enabled:
-                continue
-            if not isinstance(section, dict):
-                errors.append(f"[{name}] is not configured")
                 continue
             url = str(section.get("url", "") or "").strip()
             api_key = str(section.get("api_key", "") or "").strip()
@@ -305,54 +284,51 @@ class Config:
             f"Open and edit settings INI file: {self.config_path}"
         )
 
-    def load_user_cache(self) -> dict[str, Any]:
+    def load_user_cache(self) -> ConfigMap:
         if os.path.exists(self.user_cache_path):
             try:
                 with open(self.user_cache_path, encoding="utf-8") as f:
                     loaded = json.load(f)
-                return loaded if isinstance(loaded, dict) else {}
+                return cast("ConfigMap", loaded) if isinstance(loaded, dict) else {}
             except Exception as e:
                 print(f"Warning: Could not load user cache: {e}")
                 return {}
         return {}
 
-    def save_user_cache(self, cache: dict[str, Any]) -> None:
+    def save_user_cache(self, cache: ConfigMap) -> None:
         try:
             _write_json_atomic_locked(self.user_cache_path, cache, indent=2)
         except Exception as e:
             print(f"Warning: Could not save user cache: {e}")
 
-    def load_files_cache(self) -> dict[str, Any]:
+    def load_files_cache(self) -> ConfigMap:
         if os.path.exists(self.files_cache_path):
             try:
                 with open(self.files_cache_path, encoding="utf-8") as f:
                     loaded = json.load(f)
-                return loaded if isinstance(loaded, dict) else {}
+                return cast("ConfigMap", loaded) if isinstance(loaded, dict) else {}
             except Exception as e:
                 print(f"Warning: Could not load files cache: {e}")
                 return {}
         return {}
 
-    def save_files_cache(self, cache: dict[str, Any]) -> None:
+    def save_files_cache(self, cache: ConfigMap) -> None:
         try:
             _write_json_atomic_locked(self.files_cache_path, cache, indent=2)
         except Exception as e:
             print(f"Warning: Could not save files cache: {e}")
 
-    def get_sonarr_config(self) -> dict[str, Any] | None:
-        sonarr = self.config.get("sonarr", {}) if isinstance(self.config, dict) else {}
-        if not isinstance(sonarr, dict) or not sonarr.get("enabled", True):
+    def get_sonarr_config(self) -> ConfigMap | None:
+        sonarr = _section(self.config.get("sonarr", {}))
+        if not sonarr.get("enabled", True):
             return None
         return sonarr
 
-    def get_radarr_config(self) -> dict[str, Any] | None:
-        radarr = self.config.get("radarr", {}) if isinstance(self.config, dict) else {}
-        if not isinstance(radarr, dict) or not radarr.get("enabled", True):
+    def get_radarr_config(self) -> ConfigMap | None:
+        radarr = _section(self.config.get("radarr", {}))
+        if not radarr.get("enabled", True):
             return None
         return radarr
 
-    def get_settings(self) -> dict[str, Any]:
-        settings = (
-            self.config.get("settings", {}) if isinstance(self.config, dict) else {}
-        )
-        return settings if isinstance(settings, dict) else {}
+    def get_settings(self) -> ConfigMap:
+        return _section(self.config.get("settings", {}))

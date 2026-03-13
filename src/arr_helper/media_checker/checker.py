@@ -1,10 +1,12 @@
 """Media quality checking logic for Sonarr/Radarr."""
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import requests
 from rich import box
@@ -12,10 +14,15 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
 from rich.table import Table
-from threep_commons.subprocess_helpers import windows_no_window_run_kwargs
 
 if TYPE_CHECKING:
     from .config import Config
+
+ConfigMap = dict[str, object]
+ConfigList = list[ConfigMap]
+HttpAuth = tuple[str, str]
+RequestPayload = ConfigMap | None
+RequestResult = ConfigMap | ConfigList
 
 
 class MediaQualityChecker:
@@ -29,11 +36,11 @@ class MediaQualityChecker:
         require_subs: bool = True,
         english_codes: list[str] | None = None,
         interactive: bool = False,
-        config: "Config" = None,
-        sonarr_http_auth: tuple | None = None,
-        radarr_http_auth: tuple | None = None,
+        config: Config | None = None,
+        sonarr_http_auth: HttpAuth | None = None,
+        radarr_http_auth: HttpAuth | None = None,
         ffprobe_path: str = "ffprobe",
-    ):
+    ) -> None:
         self.sonarr_url = sonarr_url.rstrip("/")
         self.sonarr_api = sonarr_api
         self.radarr_url = radarr_url.rstrip("/")
@@ -73,7 +80,7 @@ class MediaQualityChecker:
         except OSError:
             return ""
 
-    def _normalize_cache_map(self, raw_value) -> dict[str, str]:
+    def _normalize_cache_map(self, raw_value: object) -> dict[str, str]:
         normalized: dict[str, str] = {}
         if isinstance(raw_value, dict):
             for path, signature in raw_value.items():
@@ -99,19 +106,19 @@ class MediaQualityChecker:
         cache_map.pop(file_path, None)
         return False
 
-    def _add_good_file(self, file_path: str):
+    def _add_good_file(self, file_path: str) -> None:
         """Add a file to the good files cache."""
         signature = self._file_signature(file_path)
         if signature:
             self._good_files_map[file_path] = signature
 
-    def _add_skipped_file(self, file_path: str):
+    def _add_skipped_file(self, file_path: str) -> None:
         """Add a file to the skipped files cache."""
         signature = self._file_signature(file_path)
         if signature:
             self._skipped_files_map[file_path] = signature
 
-    def save_caches(self):
+    def save_caches(self) -> None:
         """Save user cache and files cache to disk"""
         if self.config:
             self.config.save_user_cache(self.user_cache)
@@ -123,9 +130,9 @@ class MediaQualityChecker:
         api_key: str,
         endpoint: str,
         method: str = "GET",
-        data: dict | None = None,
-        auth: tuple | None = None,
-    ) -> dict | None:
+        data: RequestPayload = None,
+        auth: HttpAuth | None = None,
+    ) -> RequestResult | None:
         """Make API request to Sonarr/Radarr"""
         headers = {"X-Api-Key": api_key}
         full_url = f"{url}/api/v3/{endpoint}"
@@ -157,7 +164,8 @@ class MediaQualityChecker:
             if not response.text:
                 return {}
             try:
-                return response.json()
+                payload = response.json()
+                return cast("RequestResult", payload)
             except ValueError as e:
                 print(f"Error parsing JSON from {full_url}: {e}")
                 return None
@@ -186,28 +194,35 @@ class MediaQualityChecker:
                 file_path,
             ]
 
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=60,
-                **windows_no_window_run_kwargs(),
+                creationflags=creationflags,
             )
 
             if result.returncode != 0:
                 print(f"ffprobe error for {file_path}: {result.stderr}")
                 return False, False
 
-            data = json.loads(result.stdout)
-            streams = data.get("streams", [])
+            payload = cast("ConfigMap", json.loads(result.stdout))
+            streams_obj = payload.get("streams", [])
+            streams = (
+                cast("list[ConfigMap]", streams_obj)
+                if isinstance(streams_obj, list)
+                else []
+            )
 
             has_eng_audio = False
             has_eng_subs = False
 
             for stream in streams:
-                codec_type = stream.get("codec_type", "")
-                tags = stream.get("tags", {})
-                language = tags.get("language", "").lower()
+                codec_type = str(stream.get("codec_type", ""))
+                tags_obj = stream.get("tags", {})
+                tags = cast("ConfigMap", tags_obj) if isinstance(tags_obj, dict) else {}
+                language = str(tags.get("language", "")).lower()
 
                 # Check for English audio
                 if codec_type == "audio" and language in self.english_codes:
@@ -237,7 +252,7 @@ class MediaQualityChecker:
 
     def get_episode_releases(
         self, episode_id: int, quality_profile_id: int | None = None
-    ) -> list[dict]:
+    ) -> ConfigList:
         """Get available releases for an episode from Sonarr"""
         endpoint = f"release?episodeId={episode_id}"
         if quality_profile_id:
@@ -249,7 +264,7 @@ class MediaQualityChecker:
             endpoint,
             auth=self.sonarr_http_auth,
         )
-        return releases or []
+        return releases if isinstance(releases, list) else []
 
     def get_episodes_for_file(self, series_id: int, episode_file_id: int) -> list[int]:
         """Get episode IDs associated with an episode file"""
@@ -260,20 +275,22 @@ class MediaQualityChecker:
             auth=self.sonarr_http_auth,
         )
 
-        if not episodes:
+        if not isinstance(episodes, list):
             return []
 
         # Find episodes that use this file
-        episode_ids = []
+        episode_ids: list[int] = []
         for ep in episodes:
             if ep.get("episodeFileId") == episode_file_id:
-                episode_ids.append(ep.get("id"))
+                episode_id = ep.get("id")
+                if isinstance(episode_id, int):
+                    episode_ids.append(episode_id)
 
         return episode_ids
 
     def get_movie_releases(
         self, movie_id: int, quality_profile_id: int | None = None
-    ) -> list[dict]:
+    ) -> ConfigList:
         """Get available releases for a movie from Radarr"""
         endpoint = f"release?movieId={movie_id}"
         if quality_profile_id:
@@ -285,7 +302,7 @@ class MediaQualityChecker:
             endpoint,
             auth=self.radarr_http_auth,
         )
-        return releases or []
+        return releases if isinstance(releases, list) else []
 
     def display_releases_and_select(
         self, releases: list[dict], title: str, file_path: str

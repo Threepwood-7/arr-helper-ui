@@ -13,7 +13,7 @@ from ..media_checker.config import Config
 from .api import SonarrAPI
 from .dialogs.setup_wizard import run_setup_wizard
 from .main_window import MainWindow
-from .probe_cache import _load_probe_cache, set_ffprobe_path
+from .probe_cache import load_probe_cache, set_ffprobe_path
 
 
 def _get_or_create_qapp() -> QApplication:
@@ -34,7 +34,7 @@ def _show_validation_failure_and_exit(errors: list[str], config_loader: Config) 
 
 def main() -> int:
     configure_qsettings(APP_IDENTITY)
-    _load_probe_cache()
+    load_probe_cache()
 
     ffprobe_path = find_ffprobe()
     set_ffprobe_path(ffprobe_path)
@@ -69,17 +69,17 @@ def main() -> int:
         return 1
 
     api = SonarrAPI(
-        sonarr.get("url", ""),
-        sonarr.get("api_key", ""),
-        http_user=sonarr.get("http_basic_auth_username", ""),
-        http_pass=sonarr.get("http_basic_auth_password", ""),
+        str(sonarr.get("url", "")),
+        str(sonarr.get("api_key", "")),
+        http_user=str(sonarr.get("http_basic_auth_username", "")),
+        http_pass=str(sonarr.get("http_basic_auth_password", "")),
         request_timeout=300,
     )
     loader_api = SonarrAPI(
-        sonarr.get("url", ""),
-        sonarr.get("api_key", ""),
-        http_user=sonarr.get("http_basic_auth_username", ""),
-        http_pass=sonarr.get("http_basic_auth_password", ""),
+        str(sonarr.get("url", "")),
+        str(sonarr.get("api_key", "")),
+        http_user=str(sonarr.get("http_basic_auth_username", "")),
+        http_pass=str(sonarr.get("http_basic_auth_password", "")),
         request_timeout=300,
     )
 

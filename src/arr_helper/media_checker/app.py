@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import cast
 
 from rich import box
 from rich.panel import Panel
@@ -14,6 +15,18 @@ from .checker import MediaQualityChecker
 from .config import Config
 
 HttpAuth = tuple[str, str]
+
+
+def _normalize_codes(raw_codes: object) -> list[str]:
+    """Normalize configured language codes to a clean string list."""
+
+    if not isinstance(raw_codes, list):
+        return ["eng", "en", "english"]
+    codes: list[str] = []
+    for item in cast("list[object]", raw_codes):
+        if isinstance(item, str):
+            codes.append(item)
+    return codes or ["eng", "en", "english"]
 
 
 def _print_config_errors_and_exit(config: Config, errors: list[str]) -> None:
@@ -37,6 +50,7 @@ def main() -> int:
         print("Error: ffprobe not found in PATH or common install locations.")
         print("Please install ffmpeg/ffprobe: https://ffmpeg.org/download.html")
         return 1
+    ffprobe_path_str = str(ffprobe_path)
 
     settings = config.get_settings()
     dry_run = bool(settings.get("dry_run", False))
@@ -57,11 +71,7 @@ def main() -> int:
         password = str(cfg.get("http_basic_auth_password", "") if cfg else "")
         return (user, password) if user else None
 
-    english_codes_list = (
-        [str(code) for code in english_codes_raw]
-        if isinstance(english_codes_raw, list)
-        else ["eng", "en", "english"]
-    )
+    english_codes_list = _normalize_codes(english_codes_raw)
 
     checker = MediaQualityChecker(
         sonarr_url=str(sonarr_config.get("url", "") if sonarr_config else ""),
@@ -75,7 +85,7 @@ def main() -> int:
         config=config,
         sonarr_http_auth=_http_auth(sonarr_config),
         radarr_http_auth=_http_auth(radarr_config),
-        ffprobe_path=ffprobe_path,
+        ffprobe_path=ffprobe_path_str,
     )
 
     if interactive:

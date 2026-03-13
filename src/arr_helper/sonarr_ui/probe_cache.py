@@ -1,18 +1,18 @@
 """ffprobe cache and probing helpers for Sonarr UI."""
 
+from __future__ import annotations
+
 import contextlib
 import json
 import os
 import subprocess
 import threading
 import time
-from typing import Any
-
-from threep_commons.subprocess_helpers import windows_no_window_run_kwargs
+from typing import Any, NotRequired, TypedDict, cast
 
 from ..core.paths import get_app_cache_dir
 
-_FFPROBE: str | None = None  # resolved at startup in main()
+_ffprobe_path: str | None = None  # resolved at startup in main()
 
 
 def _get_app_cache_dir() -> str:
@@ -21,7 +21,24 @@ def _get_app_cache_dir() -> str:
 
 _PROBE_CACHE_PATH = os.path.join(_get_app_cache_dir(), "z_fprobe.cache")
 _PROBE_CACHE_LOCK_PATH = f"{_PROBE_CACHE_PATH}.lock"
-_probe_cache: dict = {}
+
+
+class ProbeInfo(TypedDict):
+    """Normalized ffprobe payload cached between refreshes."""
+
+    video_codec: str
+    video_resolution: str
+    video_bitrate: str
+    audio_codec: str
+    audio_bitrate: str
+    hdr: str
+    audio_langs: list[str]
+    sub_langs: list[str]
+    size_bytes: int
+    _probe_ok: NotRequired[bool]
+
+
+_probe_cache: dict[str, ProbeInfo] = {}
 _probe_cache_lock = threading.RLock()
 
 
@@ -96,20 +113,24 @@ def _release_probe_lock(lock_fd: int, token: str):
             pass
 
 
-def _load_probe_cache():
+def load_probe_cache() -> None:
     global _probe_cache
     if os.path.exists(_PROBE_CACHE_PATH):
         try:
             with open(_PROBE_CACHE_PATH) as f:
                 loaded = json.load(f)
             with _probe_cache_lock:
-                _probe_cache = loaded if isinstance(loaded, dict) else {}
+                _probe_cache = (
+                    cast("dict[str, ProbeInfo]", loaded)
+                    if isinstance(loaded, dict)
+                    else {}
+                )
         except Exception:
             with _probe_cache_lock:
                 _probe_cache = {}
 
 
-def _save_probe_cache(replace: bool = False):
+def save_probe_cache(replace: bool = False) -> None:
     with _probe_cache_lock:
         snapshot = dict(_probe_cache)
     lock_fd = None
@@ -122,8 +143,9 @@ def _save_probe_cache(replace: bool = False):
                 with open(_PROBE_CACHE_PATH) as f:
                     existing = json.load(f)
                 if isinstance(existing, dict):
-                    existing.update(snapshot)
-                    snapshot = existing
+                    merged = cast("dict[str, ProbeInfo]", existing)
+                    merged.update(snapshot)
+                    snapshot = merged
             except Exception:
                 pass
         with open(tmp_path, "w") as f:
@@ -159,9 +181,9 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def probe_file(file_path: str) -> dict:
+def probe_file(file_path: str) -> ProbeInfo:
     """Return dict with codecs, resolution, bitrates, HDR, languages, size."""
-    info: dict = {
+    info: ProbeInfo = {
         "video_codec": "",
         "video_resolution": "",
         "video_bitrate": "",
@@ -187,7 +209,7 @@ def probe_file(file_path: str) -> dict:
 
     try:
         cmd = [
-            _FFPROBE or "ffprobe",
+            _ffprobe_path or "ffprobe",
             "-v",
             "quiet",
             "-print_format",
@@ -196,18 +218,19 @@ def probe_file(file_path: str) -> dict:
             "-show_format",
             file_path,
         ]
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=30,
-            **windows_no_window_run_kwargs(),
+            creationflags=creationflags,
         )
         if result.returncode != 0:
             return info
-        data = json.loads(result.stdout)
+        data = cast("dict[str, object]", json.loads(result.stdout))
 
-        parsed: dict = {
+        parsed: ProbeInfo = {
             "video_codec": "",
             "video_resolution": "",
             "video_bitrate": "",
@@ -219,26 +242,43 @@ def probe_file(file_path: str) -> dict:
             "size_bytes": info["size_bytes"],
         }
 
-        for s in data.get("streams", []):
-            codec_type = s.get("codec_type", "")
-            lang = s.get("tags", {}).get("language", "")
+        streams_obj = data.get("streams", [])
+        streams = (
+            cast("list[dict[str, object]]", streams_obj)
+            if isinstance(streams_obj, list)
+            else []
+        )
+        for stream in streams:
+            codec_type = str(stream.get("codec_type", ""))
+            tags_obj = stream.get("tags", {})
+            tags = (
+                cast("dict[str, object]", tags_obj)
+                if isinstance(tags_obj, dict)
+                else {}
+            )
+            lang = str(tags.get("language", ""))
             if codec_type == "video" and not parsed["video_codec"]:
-                parsed["video_codec"] = s.get("codec_name", "").upper()
-                w = _as_int(s.get("width", 0))
-                h = _as_int(s.get("height", 0))
+                parsed["video_codec"] = str(stream.get("codec_name", "")).upper()
+                w = _as_int(stream.get("width", 0))
+                h = _as_int(stream.get("height", 0))
                 if w and h:
                     parsed["video_resolution"] = f"{w}x{h}"
-                vbr = _as_int(s.get("bit_rate", 0))
+                vbr = _as_int(stream.get("bit_rate", 0))
                 if vbr:
                     parsed["video_bitrate"] = f"{vbr // 1000} kbps"
-                color_transfer = s.get("color_transfer", "")
-                color_space = s.get("color_space", "")
-                side_data = s.get("side_data_list", [])
+                color_transfer = str(stream.get("color_transfer", ""))
+                color_space = str(stream.get("color_space", ""))
+                side_data_obj = stream.get("side_data_list", [])
+                side_data = (
+                    cast("list[dict[str, object]]", side_data_obj)
+                    if isinstance(side_data_obj, list)
+                    else []
+                )
                 has_hdr_transfer = color_transfer in ("smpte2084", "arib-std-b67")
                 has_hdr_space = color_space in ("bt2020nc", "bt2020c")
                 has_dovi = (
                     any(
-                        sd.get("side_data_type", "")
+                        str(sd.get("side_data_type", ""))
                         in ("DOVI configuration record", "Dolby Vision configuration")
                         for sd in side_data
                     )
@@ -253,8 +293,8 @@ def probe_file(file_path: str) -> dict:
                     parsed["hdr"] = "SDR"
             elif codec_type == "audio":
                 if not parsed["audio_codec"]:
-                    parsed["audio_codec"] = s.get("codec_name", "").upper()
-                    abr = _as_int(s.get("bit_rate", 0))
+                    parsed["audio_codec"] = str(stream.get("codec_name", "")).upper()
+                    abr = _as_int(stream.get("bit_rate", 0))
                     if abr:
                         parsed["audio_bitrate"] = f"{abr // 1000} kbps"
                 if lang:
@@ -264,7 +304,13 @@ def probe_file(file_path: str) -> dict:
                     parsed["sub_langs"].append(lang)
 
         if not parsed["video_bitrate"]:
-            fmt_br = _as_int(data.get("format", {}).get("bit_rate", 0))
+            format_info_obj = data.get("format", {})
+            format_info = (
+                cast("dict[str, object]", format_info_obj)
+                if isinstance(format_info_obj, dict)
+                else {}
+            )
+            fmt_br = _as_int(format_info.get("bit_rate", 0))
             if fmt_br:
                 parsed["video_bitrate"] = f"{fmt_br // 1000} kbps"
     except Exception:
@@ -276,17 +322,20 @@ def probe_file(file_path: str) -> dict:
     return parsed
 
 
-def set_ffprobe_path(ffprobe_path: str | None):
-    global _FFPROBE
-    _FFPROBE = ffprobe_path
+def set_ffprobe_path(ffprobe_path: str | None) -> None:
+    global _ffprobe_path
+    _ffprobe_path = ffprobe_path
 
 
 def clear_probe_cache():
     global _probe_cache
     with _probe_cache_lock:
         _probe_cache = {}
-    _save_probe_cache(replace=True)
+    save_probe_cache(replace=True)
 
 
 def get_probe_cache_path() -> str:
     return _PROBE_CACHE_PATH
+
+
+load_probe_cache()
