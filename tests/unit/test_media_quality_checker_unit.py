@@ -3,8 +3,8 @@ import os
 
 import pytest
 
+from arr_helper.core import locking as core_locking
 from arr_helper.media_checker import checker as mqc
-from arr_helper.media_checker import config as mqc_config
 
 
 class _DummyConfig:
@@ -230,13 +230,15 @@ def test_acquire_lock_file_reclaims_stale_dead_owner(tmp_path, monkeypatch):
     lock_path.write_text("999999:1:1", encoding="utf-8")
     os.utime(lock_path, (1, 1))
 
-    monkeypatch.setattr(mqc_config, "_pid_is_running", lambda _pid: False)
-
-    fd, token = mqc_config._acquire_lock_file(str(lock_path), timeout_s=0.5)
+    fd, token = core_locking.acquire_lock_file(
+        str(lock_path),
+        timeout_s=0.5,
+        pid_checker=lambda _pid: False,
+    )
     try:
         assert token.startswith(f"{os.getpid()}:")
     finally:
-        mqc_config._release_lock_file(str(lock_path), fd, token)
+        core_locking.release_lock_file(str(lock_path), fd, token)
 
     assert not lock_path.exists()
 
@@ -247,7 +249,9 @@ def test_acquire_lock_file_does_not_steal_live_owner_even_if_old(tmp_path, monke
     lock_path.write_text(f"{os.getpid()}:1:1", encoding="utf-8")
     os.utime(lock_path, (1, 1))
 
-    monkeypatch.setattr(mqc_config, "_pid_is_running", lambda _pid: True)
-
     with pytest.raises(TimeoutError):
-        mqc_config._acquire_lock_file(str(lock_path), timeout_s=0.05)
+        core_locking.acquire_lock_file(
+            str(lock_path),
+            timeout_s=0.05,
+            pid_checker=lambda _pid: True,
+        )

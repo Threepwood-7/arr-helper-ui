@@ -15,6 +15,8 @@ DeleteParams = dict[str, str]
 
 
 class SonarrAPI:
+    """Wrap the Sonarr v3 HTTP API with typed convenience helpers."""
+
     def __init__(
         self,
         url: str,

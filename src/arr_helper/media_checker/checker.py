@@ -26,6 +26,8 @@ RequestResult = ConfigMap | ConfigList
 
 
 class MediaQualityChecker:
+    """Coordinate Sonarr and Radarr media-quality checks and reporting."""
+
     @staticmethod
     def _payload_str(payload: ConfigMap, key: str, default: str = "") -> str:
         value = payload.get(key, default)

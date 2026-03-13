@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -72,8 +73,12 @@ _MSG_YES = QMessageBox.StandardButton.Yes
 _MSG_NO = QMessageBox.StandardButton.No
 _DIALOG_ACCEPTED = QDialog.DialogCode.Accepted
 
+logger = logging.getLogger(__name__)
+
 
 class MainWindow(QMainWindow):
+    """Present Sonarr series data and batch actions in a tree-driven UI."""
+
     def __init__(
         self,
         api: SonarrAPI,
@@ -189,7 +194,7 @@ class MainWindow(QMainWindow):
                 and isinstance((profile_name := profile.get("name")), str)
             }
         except Exception:
-            pass
+            logger.debug("Failed to cache Sonarr quality profiles", exc_info=True)
 
         # start loading
         self.worker: LoadWorker | None = None

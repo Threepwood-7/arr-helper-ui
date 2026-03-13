@@ -1,3 +1,5 @@
+"""Module entrypoint for launching the Sonarr UI helper."""
+
 from __future__ import annotations
 
 from .sonarr_ui.app import main

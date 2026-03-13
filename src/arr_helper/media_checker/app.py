@@ -39,6 +39,7 @@ def _print_config_errors_and_exit(config: Config, errors: list[str]) -> None:
 
 
 def main() -> int:
+    """Run the media quality checker CLI against configured arr services."""
     configure_qsettings(APP_IDENTITY)
     config = Config()
     validation_errors = config.validate(context="media_checker")

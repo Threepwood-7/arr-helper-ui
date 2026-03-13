@@ -33,6 +33,7 @@ def _show_validation_failure_and_exit(errors: list[str], config_loader: Config) 
 
 
 def main() -> int:
+    """Launch the Sonarr UI after validating config and ffprobe availability."""
     configure_qsettings(APP_IDENTITY)
     load_probe_cache()
 

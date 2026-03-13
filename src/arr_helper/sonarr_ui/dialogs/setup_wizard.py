@@ -28,6 +28,8 @@ ConfigSection = dict[str, object]
 
 
 class ServiceConfig(TypedDict):
+    """Editable connection settings for one arr service."""
+
     enabled: bool
     url: str
     api_key: str
@@ -90,6 +92,8 @@ class _ServiceGroup(QGroupBox):
 
 
 class ArrSetupWizardDialog(QDialog):
+    """Collect first-run Sonarr and Radarr settings from the user."""
+
     def __init__(
         self,
         initial: ConfigSection,
@@ -282,6 +286,7 @@ class ArrSetupWizardDialog(QDialog):
 
 
 def run_setup_wizard(config_loader: Config, parent: QWidget | None = None) -> bool:
+    """Show the setup wizard and persist changes when the user accepts."""
     dialog = ArrSetupWizardDialog(config_loader.config, parent=parent)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False

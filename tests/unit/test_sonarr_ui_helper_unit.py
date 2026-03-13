@@ -62,7 +62,7 @@ def test_save_probe_cache_merges_existing_when_replace_false(
     cache_path.write_text(json.dumps({"old": {"size_bytes": 1}}), encoding="utf-8")
     monkeypatch.setattr(sui_probe, "_probe_cache", {"new": {"size_bytes": 2}})
 
-    sui_probe._save_probe_cache(replace=False)
+    sui_probe.save_probe_cache(replace=False)
 
     saved = json.loads(cache_path.read_text(encoding="utf-8"))
     assert saved["old"]["size_bytes"] == 1
@@ -74,7 +74,7 @@ def test_save_probe_cache_replaces_when_replace_true(probe_cache_paths, monkeypa
     cache_path.write_text(json.dumps({"old": {"size_bytes": 1}}), encoding="utf-8")
     monkeypatch.setattr(sui_probe, "_probe_cache", {"new": {"size_bytes": 2}})
 
-    sui_probe._save_probe_cache(replace=True)
+    sui_probe.save_probe_cache(replace=True)
 
     saved = json.loads(cache_path.read_text(encoding="utf-8"))
     assert "old" not in saved
@@ -279,7 +279,7 @@ def test_loadworker_reports_warnings_and_finishes(monkeypatch):
             "size_bytes": 123,
         },
     )
-    monkeypatch.setattr(sui_workers, "_save_probe_cache", lambda *a, **k: None)
+    monkeypatch.setattr(sui_workers, "save_probe_cache", lambda *a, **k: None)
 
     worker.run()
 

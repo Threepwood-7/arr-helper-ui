@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import TYPE_CHECKING
 
 import requests
@@ -24,6 +25,8 @@ from PySide6.QtWidgets import (
 
 if TYPE_CHECKING:
     from ..api import JsonDict, JsonList, SonarrAPI
+
+logger = logging.getLogger(__name__)
 
 
 class AddShowDialog(QDialog):
@@ -70,7 +73,7 @@ class AddShowDialog(QDialog):
                 if path:
                     self.combo_root.addItem(path, path)
         except Exception:
-            pass
+            logger.debug("Failed to preload Sonarr root folders", exc_info=True)
         try:
             self._quality_profiles = api.get_quality_profiles()
             for qp in self._quality_profiles:
@@ -79,7 +82,7 @@ class AddShowDialog(QDialog):
                 if name and isinstance(profile_id, int):
                     self.combo_qp.addItem(name, profile_id)
         except Exception:
-            pass
+            logger.debug("Failed to preload Sonarr quality profiles", exc_info=True)
 
         # results list
         self.results_list = QListWidget()

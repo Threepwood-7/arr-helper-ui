@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -11,6 +12,8 @@ import time
 from typing import Any, NotRequired, TypedDict, cast
 
 from ..core.paths import get_app_cache_dir
+
+logger = logging.getLogger(__name__)
 
 _ffprobe_path: str | None = None  # resolved at startup in main()
 
@@ -114,6 +117,7 @@ def _release_probe_lock(lock_fd: int, token: str):
 
 
 def load_probe_cache() -> None:
+    """Load the persisted ffprobe cache into memory when it exists."""
     global _probe_cache
     if os.path.exists(_PROBE_CACHE_PATH):
         try:
@@ -126,11 +130,16 @@ def load_probe_cache() -> None:
                     else {}
                 )
         except Exception:
+            logger.debug(
+                "Failed to load probe cache; resetting in-memory cache",
+                exc_info=True,
+            )
             with _probe_cache_lock:
                 _probe_cache = {}
 
 
 def save_probe_cache(replace: bool = False) -> None:
+    """Persist the ffprobe cache with best-effort merge and atomic replace."""
     with _probe_cache_lock:
         snapshot = dict(_probe_cache)
     lock_fd = None
@@ -147,7 +156,10 @@ def save_probe_cache(replace: bool = False) -> None:
                     merged.update(snapshot)
                     snapshot = merged
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to merge existing probe cache snapshot",
+                    exc_info=True,
+                )
         with open(tmp_path, "w") as f:
             json.dump(snapshot, f, indent=1)
             f.flush()
@@ -364,11 +376,13 @@ def probe_file(file_path: str) -> ProbeInfo:
 
 
 def set_ffprobe_path(ffprobe_path: str | None) -> None:
+    """Store the resolved ffprobe executable path for future probe calls."""
     global _ffprobe_path
     _ffprobe_path = ffprobe_path
 
 
 def clear_probe_cache():
+    """Clear the in-memory and on-disk probe cache."""
     global _probe_cache
     with _probe_cache_lock:
         _probe_cache = {}
@@ -376,6 +390,7 @@ def clear_probe_cache():
 
 
 def get_probe_cache_path() -> str:
+    """Return the on-disk path used for the persistent probe cache file."""
     return _PROBE_CACHE_PATH
 
 

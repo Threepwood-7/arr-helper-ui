@@ -9,6 +9,7 @@ from typing import Any
 
 
 def pid_is_running(pid: int) -> bool:
+    """Return whether the given process identifier still appears alive."""
     if pid <= 0:
         return False
     try:
@@ -27,6 +28,7 @@ def acquire_lock_file(
     timeout_s: float = 10.0,
     pid_checker: Callable[[int], bool] | None = None,
 ) -> tuple[int, str]:
+    """Acquire an exclusive lock file and return its file descriptor and token."""
     token = f"{os.getpid()}:{threading.get_ident()}:{time.time_ns()}"
     deadline = time.time() + timeout_s
     check_pid = pid_checker or pid_is_running
@@ -68,6 +70,7 @@ def acquire_lock_file(
 
 
 def release_lock_file(lock_path: str, lock_fd: int, token: str):
+    """Release one lock file when the stored ownership token still matches."""
     try:
         os.close(lock_fd)
     finally:
@@ -82,6 +85,7 @@ def release_lock_file(lock_path: str, lock_fd: int, token: str):
 
 
 def write_json_atomic_locked(path: str, payload: dict[str, Any], indent: int = 2):
+    """Write JSON atomically while holding a best-effort interprocess lock."""
     lock_path = f"{path}.lock"
     lock_fd, lock_token = acquire_lock_file(lock_path)
     tmp_path = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
