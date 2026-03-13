@@ -345,6 +345,56 @@ class MediaQualityChecker:
         size_obj = release.get("size", 0)
         return size_obj if isinstance(size_obj, int) else 0
 
+    @staticmethod
+    def _filter_releases(
+        releases: list[ConfigMap],
+        search_term: str,
+    ) -> list[ConfigMap]:
+        if not search_term:
+            return releases
+        term = search_term.lower()
+        return [
+            release
+            for release in releases
+            if term in str(release.get("title", "")).lower()
+        ]
+
+    def _prompt_release_choice(
+        self,
+        filtered_releases: list[ConfigMap],
+        file_path: str,
+    ) -> tuple[str, ConfigMap | str | None]:
+        try:
+            choice_input = input("\n[Your choice]: ").strip().lower()
+        except KeyboardInterrupt:
+            self.console.print("\n[yellow]Skipped[/yellow]")
+            return ("return", None)
+
+        if choice_input == "s":
+            return ("search", input("Enter search term: ").strip())
+        if choice_input == "c":
+            return ("clear", "")
+
+        try:
+            choice = int(choice_input)
+        except ValueError:
+            self.console.print(
+                "[red]Invalid input. Please enter a number, 's', 'c', 0, or -1[/red]"
+            )
+            return ("retry", None)
+
+        if choice == -1:
+            return ("return", None)
+        if choice == 0:
+            self._add_skipped_file(file_path)
+            self.save_caches()
+            self.console.print("[yellow]Marked to skip permanently[/yellow]")
+            return ("return", None)
+        if 1 <= choice <= len(filtered_releases):
+            return ("return", filtered_releases[choice - 1])
+        self.console.print("[red]Invalid choice[/red]")
+        return ("retry", None)
+
     def display_releases_and_select(
         self,
         releases: ConfigList,
@@ -388,15 +438,7 @@ class MediaQualityChecker:
             table.add_column("Quality", style="yellow", width=15)
             table.add_column("Indexer", style="blue", width=6)
 
-            # Apply filter if search term exists
-            if search_term:
-                filtered_releases = [
-                    release
-                    for release in releases
-                    if search_term.lower() in str(release.get("title", "")).lower()
-                ]
-            else:
-                filtered_releases = releases
+            filtered_releases = self._filter_releases(releases, search_term)
 
             if not filtered_releases:
                 self.console.print(
@@ -434,35 +476,16 @@ class MediaQualityChecker:
             self.console.print("  Enter 0 to skip (and remember permanently)")
             self.console.print("  Enter -1 to keep current file")
 
-            try:
-                choice_input = input("\n[Your choice]: ").strip().lower()
-                if choice_input == "s":
-                    search_term = input("Enter search term: ").strip()
-                    continue
-                if choice_input == "c":
-                    search_term = ""
-                    continue
-                choice = int(choice_input)
-                if choice == -1:
-                    return None
-                if choice == 0:
-                    self._add_skipped_file(file_path)
-                    self.save_caches()
-                    self.console.print("[yellow]Marked to skip permanently[/yellow]")
-                    return None
-                if 1 <= choice <= len(filtered_releases):
-                    return filtered_releases[choice - 1]
-                self.console.print("[red]Invalid choice[/red]")
+            action, payload = self._prompt_release_choice(filtered_releases, file_path)
+            if action == "search":
+                search_term = payload if isinstance(payload, str) else ""
                 continue
-            except ValueError:
-                self.console.print(
-                    "[red]Invalid input. Please enter a number, 's', 'c', 0, "
-                    "or -1[/red]"
-                )
+            if action == "clear":
+                search_term = ""
                 continue
-            except KeyboardInterrupt:
-                self.console.print("\n[yellow]Skipped[/yellow]")
-                return None
+            if action == "retry":
+                continue
+            return payload if isinstance(payload, dict) else None
 
     def download_release(
         self,

@@ -87,6 +87,7 @@ LEGACY_ROOT_CONFIG_PATTERNS = (
 CANONICAL_CONFIG_REQUIRED = ("config/app.defaults.toml", "config/app.example.toml")
 CANONICAL_CONFIG_LOCAL = "config/app.local.toml"
 REQUIRED_NAMING_RULE = "N"
+ALLOWED_NON_PACKAGE_SRC_DIRS = {"c", "vbs"}
 REQUIRED_QT_NAMING_IGNORES = {
     "activateWindow",
     "closeEvent",
@@ -115,11 +116,23 @@ SILENT_BROAD_EXCEPT_RE = re.compile(
     flags=re.MULTILINE,
 )
 MAX_DOCSTRING_WARNINGS = 20
-LEGAL_DISCLAIMER_REQUIRED = """
-## Legal Disclaimer
-
-THIS SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING, WITHOUT LIMITATION, ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, OR QUIET ENJOYMENT. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE AUTHORS, CONTRIBUTORS, MAINTAINERS, DISTRIBUTORS, AND AFFILIATED PARTIES SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF DATA, PROFITS, GOODWILL, BUSINESS OPPORTUNITY, OR SERVICE INTERRUPTION, ARISING OUT OF OR RELATING TO THE USE OF, OR INABILITY TO USE, THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THIS SOFTWARE HAS BEEN DEVELOPED, IN WHOLE OR IN PART, BY "INTELLIGENT TOOLS"; ACCORDINGLY, OUTPUTS MAY CONTAIN ERRORS OR OMISSIONS, AND YOU ASSUME FULL RESPONSIBILITY FOR INDEPENDENT VALIDATION, TESTING, LEGAL COMPLIANCE, AND SAFE OPERATION PRIOR TO ANY RELIANCE OR DEPLOYMENT.
-"""
+LEGAL_DISCLAIMER_REQUIRED = (
+    "## Legal Disclaimer\n\n"
+    'THIS SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES OF ANY '
+    "KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING, WITHOUT "
+    "LIMITATION, ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR "
+    "PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, OR QUIET ENJOYMENT. TO THE MAXIMUM "
+    "EXTENT PERMITTED BY APPLICABLE LAW, THE AUTHORS, CONTRIBUTORS, MAINTAINERS, "
+    "DISTRIBUTORS, AND AFFILIATED PARTIES SHALL NOT BE LIABLE FOR ANY DIRECT, "
+    "INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR "
+    "FOR ANY LOSS OF DATA, PROFITS, GOODWILL, BUSINESS OPPORTUNITY, OR SERVICE "
+    "INTERRUPTION, ARISING OUT OF OR RELATING TO THE USE OF, OR INABILITY TO USE, THIS "
+    "SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. THIS SOFTWARE HAS "
+    'BEEN DEVELOPED, IN WHOLE OR IN PART, BY "INTELLIGENT TOOLS"; ACCORDINGLY, OUTPUTS '
+    "MAY CONTAIN ERRORS OR OMISSIONS, AND YOU ASSUME FULL RESPONSIBILITY FOR "
+    "INDEPENDENT VALIDATION, TESTING, LEGAL COMPLIANCE, AND SAFE OPERATION PRIOR TO "
+    "ANY RELIANCE OR DEPLOYMENT.\n"
+)
 
 
 def run_command(repo_root: Path, args: list[str]) -> str:
@@ -229,7 +242,8 @@ def validate_main_entrypoint_contract(
 
 def check_legal_disclaimer(readme_content: str, errors: list[str]) -> None:
     pattern = re.compile(
-        rf"{re.escape(LEGAL_DISCLAIMER_START)}\s*(.*?)\s*{re.escape(LEGAL_DISCLAIMER_END)}",
+        rf"{re.escape(LEGAL_DISCLAIMER_START)}\s*(.*?)\s*"
+        rf"{re.escape(LEGAL_DISCLAIMER_END)}",
         flags=re.DOTALL,
     )
     match = pattern.search(normalize_newlines(readme_content))
@@ -244,7 +258,8 @@ def check_legal_disclaimer(readme_content: str, errors: list[str]) -> None:
     expected = normalize_newlines(LEGAL_DISCLAIMER_REQUIRED).strip()
     if actual != expected:
         errors.append(
-            "README.md legal disclaimer content does not match the canonical required block."
+            "README.md legal disclaimer content does not match the canonical "
+            "required block."
         )
 
 
@@ -349,7 +364,8 @@ def collect_silent_broad_exception_warnings(
             continue
         if SILENT_BROAD_EXCEPT_RE.search(content):
             warnings.append(
-                f"Silent broad exception guidance: replace 'except Exception: pass' in {rel} "
+                "Silent broad exception guidance: replace 'except Exception: "
+                f"pass' in {rel} "
                 "with logging or signal emission."
             )
 
@@ -389,7 +405,8 @@ def collect_docstring_guidance(
             if isinstance(node, ast.ClassDef):
                 if _is_public_name(node.name) and ast.get_docstring(node) is None:
                     warnings.append(
-                        f"Docstring guidance: add class docstring for '{node.name}' in {rel}:{node.lineno}."
+                        "Docstring guidance: add class docstring for "
+                        f"'{node.name}' in {rel}:{node.lineno}."
                     )
                     warning_count += 1
             elif (
@@ -398,7 +415,8 @@ def collect_docstring_guidance(
                 and ast.get_docstring(node) is None
             ):
                 warnings.append(
-                    f"Docstring guidance: add function docstring for '{node.name}' in {rel}:{node.lineno}."
+                    "Docstring guidance: add function docstring for "
+                    f"'{node.name}' in {rel}:{node.lineno}."
                 )
                 warning_count += 1
 
@@ -506,13 +524,17 @@ def main() -> int:
             [
                 p
                 for p in src_root.iterdir()
-                if p.is_dir() and not p.name.startswith(".") and p.name != "__pycache__"
+                if p.is_dir()
+                and not p.name.startswith(".")
+                and p.name != "__pycache__"
+                and p.name not in ALLOWED_NON_PACKAGE_SRC_DIRS
             ]
         )
 
     if len(src_packages) != 1:
         errors.append(
-            f"Expected exactly one package directory under src/, found {len(src_packages)}."
+            "Expected exactly one package directory under src/, found "
+            f"{len(src_packages)}."
         )
         package_name = ""
     else:
@@ -533,7 +555,10 @@ def main() -> int:
 
         tool_table = require_table(pyproject, "tool", errors, "tool")
         basedpyright_table = require_table(
-            tool_table, "basedpyright", errors, "tool.basedpyright"
+            tool_table,
+            "basedpyright",
+            errors,
+            "tool.basedpyright",
         )
         if (
             basedpyright_table
@@ -546,7 +571,10 @@ def main() -> int:
             lint_table = require_table(ruff_table, "lint", errors, "tool.ruff.lint")
             if lint_table:
                 select_rules = require_string_list(
-                    lint_table, "select", errors, "tool.ruff.lint"
+                    lint_table,
+                    "select",
+                    errors,
+                    "tool.ruff.lint",
                 )
                 if select_rules and REQUIRED_NAMING_RULE not in set(select_rules):
                     errors.append("tool.ruff.lint.select must include naming rule 'N'")
@@ -570,7 +598,8 @@ def main() -> int:
                         )
                         if missing_ignores:
                             errors.append(
-                                "tool.ruff.lint.pep8-naming.ignore-names is missing required Qt "
+                                "tool.ruff.lint.pep8-naming.ignore-names is "
+                                "missing required Qt "
                                 f"exceptions: {', '.join(missing_ignores)}"
                             )
 
@@ -650,7 +679,8 @@ def main() -> int:
         else:
             try:
                 conftest_content = conftest_path.read_text(
-                    encoding="utf-8", errors="ignore"
+                    encoding="utf-8",
+                    errors="ignore",
                 )
             except OSError as exc:
                 errors.append(
@@ -659,7 +689,8 @@ def main() -> int:
             else:
                 if not WINDOW_FIXTURE_RE.search(conftest_content):
                     errors.append(
-                        "tests/conftest.py must define a shared @pytest.fixture def window(...)"
+                        "tests/conftest.py must define a shared @pytest.fixture "
+                        "def window(...)"
                     )
 
     if package_name:
@@ -686,7 +717,8 @@ def main() -> int:
         validate_main_entrypoint_contract(repo_root, package_name, tracked_set, errors)
         if has_module_package_name_collisions(tracked, package_name):
             errors.append(
-                f"Module/package collision detected in src/{package_name}: avoid name pairs like "
+                "Module/package collision detected in "
+                f"src/{package_name}: avoid name pairs like "
                 "'utils.py' and 'utils/__init__.py'."
             )
 

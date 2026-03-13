@@ -116,15 +116,9 @@ select = [
   "TCH",
   "RUF",
 ]
-external = ["C901"]
-ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*" = ["S101", "S105", "S106"]
-"src/arr_helper/media_checker/checker.py" = ["C901"]
-"src/arr_helper/sonarr_ui/main_window.py" = ["C901"]
-"src/arr_helper/sonarr_ui/probe_cache.py" = ["C901"]
-"src/arr_helper/sonarr_ui/workers.py" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["arr_helper"]
@@ -198,8 +192,6 @@ known_first_party = ["arr_helper", "_common"]
 pythonVersion = "3.13"
 pythonPlatform = "All"
 typeCheckingMode = "strict"
-venvPath = "."
-venv = ".venv"
 include = ["src"]
 exclude = ["tests", "**/__pycache__"]
 
