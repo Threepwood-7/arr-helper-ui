@@ -433,6 +433,58 @@ def collect_docstring_guidance(
         )
 
 
+def _node_line_count(node: ast.AST) -> int:
+    lineno = int(getattr(node, "lineno", 1))
+    end_lineno = int(getattr(node, "end_lineno", lineno))
+    return max(1, end_lineno - lineno + 1)
+
+
+def _append_large_class_guidance(
+    module: ast.Module,
+    *,
+    rel: str,
+    warnings: list[str],
+    warning_count: int,
+) -> tuple[int, bool]:
+    for node in module.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        class_lines = _node_line_count(node)
+        if class_lines > MAX_SRC_CLASS_LINES_WARNING:
+            warnings.append(
+                "Structure guidance: oversized class "
+                f"'{node.name}' has {class_lines} lines in {rel}:{node.lineno}. "
+                "Prefer feature coordinators or helper components."
+            )
+            warning_count += 1
+        if warning_count >= MAX_SIZE_GUIDANCE_WARNINGS:
+            return warning_count, True
+    return warning_count, False
+
+
+def _append_large_function_guidance(
+    module: ast.Module,
+    *,
+    rel: str,
+    warnings: list[str],
+    warning_count: int,
+) -> tuple[int, bool]:
+    for node in ast.walk(module):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        function_lines = _node_line_count(node)
+        if function_lines > MAX_SRC_FUNCTION_LINES_WARNING:
+            warnings.append(
+                "Structure guidance: oversized function "
+                f"'{node.name}' has {function_lines} lines in {rel}:{node.lineno}. "
+                "Prefer extracting focused helper routines."
+            )
+            warning_count += 1
+        if warning_count >= MAX_SIZE_GUIDANCE_WARNINGS:
+            return warning_count, True
+    return warning_count, False
+
+
 def collect_structure_size_guidance(
     repo_root: Path,
     tracked: list[str],
@@ -456,39 +508,21 @@ def collect_structure_size_guidance(
         except SyntaxError:
             continue
 
-        for node in module.body:
-            if not isinstance(node, ast.ClassDef):
-                continue
-            end_lineno = getattr(node, "end_lineno", node.lineno)
-            class_lines = max(1, int(end_lineno) - int(node.lineno) + 1)
-            if class_lines > MAX_SRC_CLASS_LINES_WARNING:
-                warnings.append(
-                    "Structure guidance: oversized class "
-                    f"'{node.name}' has {class_lines} lines in {rel}:{node.lineno}. "
-                    "Prefer feature coordinators or helper components."
-                )
-                warning_count += 1
-            if warning_count >= MAX_SIZE_GUIDANCE_WARNINGS:
-                truncated = True
-                break
+        warning_count, truncated = _append_large_class_guidance(
+            module,
+            rel=rel,
+            warnings=warnings,
+            warning_count=warning_count,
+        )
         if truncated:
             break
 
-        for node in ast.walk(module):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            end_lineno = getattr(node, "end_lineno", node.lineno)
-            function_lines = max(1, int(end_lineno) - int(node.lineno) + 1)
-            if function_lines > MAX_SRC_FUNCTION_LINES_WARNING:
-                warnings.append(
-                    "Structure guidance: oversized function "
-                    f"'{node.name}' has {function_lines} lines in {rel}:{node.lineno}. "
-                    "Prefer extracting focused helper routines."
-                )
-                warning_count += 1
-            if warning_count >= MAX_SIZE_GUIDANCE_WARNINGS:
-                truncated = True
-                break
+        warning_count, truncated = _append_large_function_guidance(
+            module,
+            rel=rel,
+            warnings=warnings,
+            warning_count=warning_count,
+        )
         if truncated:
             break
 
@@ -499,140 +533,134 @@ def collect_structure_size_guidance(
         )
 
 
-def main() -> int:
-    repo_root = Path(__file__).resolve().parents[2]
-    errors: list[str] = []
-    warnings: list[str] = []
-    project_kind = load_project_kind(repo_root)
+def collect_src_packages(src_root: Path) -> list[Path]:
+    if not src_root.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in src_root.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and path.name != "__pycache__"
+            and path.name not in ALLOWED_NON_PACKAGE_SRC_DIRS
+        ]
+    )
 
-    try:
-        tracked = tracked_files(repo_root)
-        eol_lines = tracked_eol_lines(repo_root)
-    except RuntimeError as exc:
-        print(
-            f"Policy check failed: unable to inspect git-tracked files ({exc}).",
-            file=sys.stderr,
-        )
-        return 1
 
-    tracked_set = set(tracked)
-
-    src_root = repo_root / "src"
-    src_packages = []
-    if src_root.exists():
-        src_packages = sorted(
-            [
-                p
-                for p in src_root.iterdir()
-                if p.is_dir()
-                and not p.name.startswith(".")
-                and p.name != "__pycache__"
-                and p.name not in ALLOWED_NON_PACKAGE_SRC_DIRS
-            ]
-        )
-
+def resolve_package_name(src_packages: list[Path], errors: list[str]) -> str:
     if len(src_packages) != 1:
         errors.append(
             "Expected exactly one package directory under src/, found "
             f"{len(src_packages)}."
         )
-        package_name = ""
-    else:
-        package_name = src_packages[0].name
-        if not PACKAGE_NAME_RE.fullmatch(package_name):
-            errors.append(
-                f"Package directory name must be snake_case under src/: {package_name}"
-            )
-
-    pyproject = load_pyproject(repo_root, errors)
-    if pyproject:
-        project_table = require_table(pyproject, "project", errors, "project")
-        project_name = project_table.get("name")
-        if not isinstance(project_name, str) or not project_name.strip():
-            errors.append("project.name must be a non-empty string in pyproject.toml")
-        elif not PROJECT_NAME_RE.fullmatch(project_name):
-            errors.append(f"project.name must be kebab-case: {project_name}")
-
-        tool_table = require_table(pyproject, "tool", errors, "tool")
-        basedpyright_table = require_table(
-            tool_table,
-            "basedpyright",
-            errors,
-            "tool.basedpyright",
+        return ""
+    package_name = src_packages[0].name
+    if not PACKAGE_NAME_RE.fullmatch(package_name):
+        errors.append(
+            f"Package directory name must be snake_case under src/: {package_name}"
         )
-        if (
-            basedpyright_table
-            and basedpyright_table.get("typeCheckingMode") != "strict"
-        ):
-            errors.append("tool.basedpyright.typeCheckingMode must be strict")
+    return package_name
 
-        ruff_table = require_table(tool_table, "ruff", errors, "tool.ruff")
-        if ruff_table:
-            lint_table = require_table(ruff_table, "lint", errors, "tool.ruff.lint")
-            if lint_table:
-                select_rules = require_string_list(
-                    lint_table,
-                    "select",
-                    errors,
-                    "tool.ruff.lint",
-                )
-                if select_rules and REQUIRED_NAMING_RULE not in set(select_rules):
-                    errors.append("tool.ruff.lint.select must include naming rule 'N'")
 
-                pep8_naming_table = require_table(
-                    lint_table,
-                    "pep8-naming",
+def validate_pyproject_policy(
+    pyproject: dict[str, object],
+    *,
+    project_kind: str,
+    errors: list[str],
+) -> None:
+    project_table = require_table(pyproject, "project", errors, "project")
+    project_name = project_table.get("name")
+    if not isinstance(project_name, str) or not project_name.strip():
+        errors.append("project.name must be a non-empty string in pyproject.toml")
+    elif not PROJECT_NAME_RE.fullmatch(project_name):
+        errors.append(f"project.name must be kebab-case: {project_name}")
+
+    tool_table = require_table(pyproject, "tool", errors, "tool")
+    basedpyright_table = require_table(
+        tool_table,
+        "basedpyright",
+        errors,
+        "tool.basedpyright",
+    )
+    if basedpyright_table and basedpyright_table.get("typeCheckingMode") != "strict":
+        errors.append("tool.basedpyright.typeCheckingMode must be strict")
+
+    ruff_table = require_table(tool_table, "ruff", errors, "tool.ruff")
+    if ruff_table:
+        lint_table = require_table(ruff_table, "lint", errors, "tool.ruff.lint")
+        if lint_table:
+            select_rules = require_string_list(
+                lint_table,
+                "select",
+                errors,
+                "tool.ruff.lint",
+            )
+            if select_rules and REQUIRED_NAMING_RULE not in set(select_rules):
+                errors.append("tool.ruff.lint.select must include naming rule 'N'")
+
+            pep8_naming_table = require_table(
+                lint_table,
+                "pep8-naming",
+                errors,
+                "tool.ruff.lint.pep8-naming",
+            )
+            if pep8_naming_table:
+                ignore_names = require_string_list(
+                    pep8_naming_table,
+                    "ignore-names",
                     errors,
                     "tool.ruff.lint.pep8-naming",
                 )
-                if pep8_naming_table:
-                    ignore_names = require_string_list(
-                        pep8_naming_table,
-                        "ignore-names",
-                        errors,
-                        "tool.ruff.lint.pep8-naming",
+                if ignore_names:
+                    missing_ignores = sorted(
+                        REQUIRED_QT_NAMING_IGNORES - set(ignore_names)
                     )
-                    if ignore_names:
-                        missing_ignores = sorted(
-                            REQUIRED_QT_NAMING_IGNORES - set(ignore_names)
+                    if missing_ignores:
+                        errors.append(
+                            "tool.ruff.lint.pep8-naming.ignore-names is "
+                            "missing required Qt exceptions: "
+                            f"{', '.join(missing_ignores)}"
                         )
-                        if missing_ignores:
-                            errors.append(
-                                "tool.ruff.lint.pep8-naming.ignore-names is "
-                                "missing required Qt "
-                                f"exceptions: {', '.join(missing_ignores)}"
-                            )
 
-        pytest_table = tool_table.get("pytest", {}).get("ini_options", {})
-        if not isinstance(pytest_table, dict):
-            errors.append(
-                "Missing or invalid [tool.pytest.ini_options] table in pyproject.toml"
-            )
-        else:
-            testpaths = pytest_table.get("testpaths")
-            if not isinstance(testpaths, list) or "tests" not in testpaths:
-                errors.append("tool.pytest.ini_options.testpaths must include 'tests'")
+    pytest_table = tool_table.get("pytest", {}).get("ini_options", {})
+    if not isinstance(pytest_table, dict):
+        errors.append(
+            "Missing or invalid [tool.pytest.ini_options] table in pyproject.toml"
+        )
+        return
 
-            markers = pytest_table.get("markers")
-            if not isinstance(markers, list) or not all(
-                isinstance(item, str) for item in markers
-            ):
-                required_marker_names = sorted(required_pytest_markers(project_kind))
-                errors.append(
-                    "tool.pytest.ini_options.markers must be a list containing "
-                    + "/".join(required_marker_names)
-                )
-            else:
-                configured_markers = {parse_marker_name(item) for item in markers}
-                missing_markers = sorted(
-                    required_pytest_markers(project_kind) - configured_markers
-                )
-                if missing_markers:
-                    errors.append(
-                        "tool.pytest.ini_options.markers is missing required markers: "
-                        + ", ".join(missing_markers)
-                    )
+    testpaths = pytest_table.get("testpaths")
+    if not isinstance(testpaths, list) or "tests" not in testpaths:
+        errors.append("tool.pytest.ini_options.testpaths must include 'tests'")
 
+    markers = pytest_table.get("markers")
+    if not isinstance(markers, list) or not all(
+        isinstance(item, str) for item in markers
+    ):
+        required_marker_names = sorted(required_pytest_markers(project_kind))
+        errors.append(
+            "tool.pytest.ini_options.markers must be a list containing "
+            + "/".join(required_marker_names)
+        )
+        return
+
+    configured_markers = {parse_marker_name(item) for item in markers}
+    missing_markers = sorted(required_pytest_markers(project_kind) - configured_markers)
+    if missing_markers:
+        errors.append(
+            "tool.pytest.ini_options.markers is missing required markers: "
+            + ", ".join(missing_markers)
+        )
+
+
+def validate_required_paths(
+    repo_root: Path,
+    *,
+    tracked_set: set[str],
+    project_kind: str,
+    errors: list[str],
+) -> None:
     for rel in ROOT_REQUIRED:
         if rel not in tracked_set:
             errors.append(f"Missing required tracked file: {rel}")
@@ -656,72 +684,97 @@ def main() -> int:
         if rel not in tracked_set and not (repo_root / rel).is_dir():
             errors.append(f"Missing required test directory: {rel}")
 
+
+def validate_test_layout(
+    repo_root: Path,
+    *,
+    project_kind: str,
+    errors: list[str],
+) -> None:
     tests_root = repo_root / "tests"
-    if tests_root.is_dir():
-        for test_dir in tests_root.rglob("*"):
-            if not test_dir.is_dir():
-                continue
-            if test_dir.name.startswith(".") or test_dir.name == "__pycache__":
-                continue
-            rel_dir = test_dir.relative_to(repo_root).as_posix()
-            init_file = test_dir / "__init__.py"
-            if not init_file.is_file():
-                errors.append(
-                    f"Missing __init__.py in test package directory: {rel_dir}"
-                )
-    else:
+    if not tests_root.is_dir():
         errors.append("Missing tests/ directory")
+        return
 
-    if project_kind == "qt_app":
-        conftest_path = repo_root / "tests" / "conftest.py"
-        if not conftest_path.is_file():
-            errors.append("Missing tests/conftest.py")
-        else:
-            try:
-                conftest_content = conftest_path.read_text(
-                    encoding="utf-8",
-                    errors="ignore",
-                )
-            except OSError as exc:
-                errors.append(
-                    f"Unable to read tests/conftest.py for fixture policy: {exc}"
-                )
-            else:
-                if not WINDOW_FIXTURE_RE.search(conftest_content):
-                    errors.append(
-                        "tests/conftest.py must define a shared @pytest.fixture "
-                        "def window(...)"
-                    )
+    for test_dir in tests_root.rglob("*"):
+        if not test_dir.is_dir():
+            continue
+        if test_dir.name.startswith(".") or test_dir.name == "__pycache__":
+            continue
+        rel_dir = test_dir.relative_to(repo_root).as_posix()
+        if not (test_dir / "__init__.py").is_file():
+            errors.append(f"Missing __init__.py in test package directory: {rel_dir}")
 
-    if package_name:
-        for rel in required_package_files(project_kind):
-            package_file = f"src/{package_name}/{rel}"
-            if package_file not in tracked_set:
-                errors.append(f"Missing required tracked file: {package_file}")
-        package_init_file = f"src/{package_name}/__init__.py"
-        if package_init_file in tracked_set:
-            try:
-                package_init_content = (repo_root / package_init_file).read_text(
-                    encoding="utf-8",
-                    errors="ignore",
-                )
-            except OSError as exc:
-                errors.append(
-                    f"Unable to read {package_init_file} for __all__ policy: {exc}"
-                )
-            else:
-                if not ALL_EXPORT_RE.search(package_init_content):
-                    errors.append(
-                        f"Missing required __all__ export list in {package_init_file}"
-                    )
-        validate_main_entrypoint_contract(repo_root, package_name, tracked_set, errors)
-        if has_module_package_name_collisions(tracked, package_name):
-            errors.append(
-                "Module/package collision detected in "
-                f"src/{package_name}: avoid name pairs like "
-                "'utils.py' and 'utils/__init__.py'."
+    if project_kind != "qt_app":
+        return
+
+    conftest_path = tests_root / "conftest.py"
+    if not conftest_path.is_file():
+        errors.append("Missing tests/conftest.py")
+        return
+    try:
+        conftest_content = conftest_path.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+    except OSError as exc:
+        errors.append(f"Unable to read tests/conftest.py for fixture policy: {exc}")
+        return
+    if not WINDOW_FIXTURE_RE.search(conftest_content):
+        errors.append(
+            "tests/conftest.py must define a shared @pytest.fixture def window(...)"
+        )
+
+
+def validate_package_contracts(
+    repo_root: Path,
+    *,
+    tracked: list[str],
+    tracked_set: set[str],
+    package_name: str,
+    project_kind: str,
+    errors: list[str],
+) -> None:
+    if not package_name:
+        return
+
+    for rel in required_package_files(project_kind):
+        package_file = f"src/{package_name}/{rel}"
+        if package_file not in tracked_set:
+            errors.append(f"Missing required tracked file: {package_file}")
+
+    package_init_file = f"src/{package_name}/__init__.py"
+    if package_init_file in tracked_set:
+        try:
+            package_init_content = (repo_root / package_init_file).read_text(
+                encoding="utf-8",
+                errors="ignore",
             )
+        except OSError as exc:
+            errors.append(
+                f"Unable to read {package_init_file} for __all__ policy: {exc}"
+            )
+        else:
+            if not ALL_EXPORT_RE.search(package_init_content):
+                errors.append(
+                    f"Missing required __all__ export list in {package_init_file}"
+                )
 
+    validate_main_entrypoint_contract(repo_root, package_name, tracked_set, errors)
+    if has_module_package_name_collisions(tracked, package_name):
+        errors.append(
+            "Module/package collision detected in "
+            f"src/{package_name}: avoid name pairs like "
+            "'utils.py' and 'utils/__init__.py'."
+        )
+
+
+def validate_legacy_configs(
+    tracked: list[str],
+    *,
+    tracked_set: set[str],
+    errors: list[str],
+) -> None:
     for rel in tracked:
         lower = rel.lower()
         if lower.endswith(".cmd") or lower.endswith(".ps1"):
@@ -741,58 +794,90 @@ def main() -> int:
         or any(rel in tracked_set for rel in CANONICAL_CONFIG_REQUIRED)
         or CANONICAL_CONFIG_LOCAL in tracked_set
     )
-    if has_toml_app_config:
-        for rel in CANONICAL_CONFIG_REQUIRED:
-            if rel not in tracked_set:
-                errors.append(f"Missing canonical app config file: {rel}")
+    if not has_toml_app_config:
+        return
+    for rel in CANONICAL_CONFIG_REQUIRED:
+        if rel not in tracked_set:
+            errors.append(f"Missing canonical app config file: {rel}")
+
+
+def validate_python_paths(
+    repo_root: Path,
+    *,
+    tracked: list[str],
+    package_name: str,
+    project_kind: str,
+    warnings: list[str],
+    errors: list[str],
+) -> None:
+    required_files = set(required_package_files(project_kind))
+    package_prefix = f"src/{package_name}/" if package_name else ""
 
     for rel in tracked:
         if not rel.endswith(".py"):
             continue
 
-        if package_name and rel.startswith(f"src/{package_name}/"):
+        if package_prefix and rel.startswith(package_prefix):
             filename = Path(rel).name
-            if filename in required_package_files(project_kind):
-                continue
-            if not SRC_MODULE_RE.match(filename):
+            if filename not in required_files and not SRC_MODULE_RE.match(filename):
                 errors.append(f"Non-standard Python module filename in src/: {rel}")
 
         if rel.startswith("tests/"):
             filename = Path(rel).name
-            if filename in {"__init__.py", "conftest.py"}:
-                continue
-            if not TEST_FILE_RE.match(filename):
+            if filename not in {
+                "__init__.py",
+                "conftest.py",
+            } and not TEST_FILE_RE.match(filename):
                 errors.append(f"Non-standard test filename in tests/: {rel}")
 
-        if rel.startswith("src/"):
-            abs_path = repo_root / rel
-            try:
-                line_count = count_text_lines(
-                    abs_path.read_text(encoding="utf-8", errors="ignore")
-                )
-            except OSError:
-                continue
-            if line_count > MAX_SRC_FILE_LINES:
-                warnings.append(
-                    f"Python source file exceeds {MAX_SRC_FILE_LINES} lines "
-                    f"({line_count}): {rel}"
-                )
+        if not rel.startswith("src/"):
+            continue
+        abs_path = repo_root / rel
+        try:
+            line_count = count_text_lines(
+                abs_path.read_text(encoding="utf-8", errors="ignore")
+            )
+        except OSError:
+            continue
+        if line_count > MAX_SRC_FILE_LINES:
+            warnings.append(
+                f"Python source file exceeds {MAX_SRC_FILE_LINES} lines "
+                f"({line_count}): {rel}"
+            )
 
-    if package_name:
-        banned_launch_ref = f"python -m {package_name}.main"
-        for rel in tracked:
-            if to_suffix(rel) not in TEXT_SUFFIXES:
-                continue
-            abs_path = repo_root / rel
-            try:
-                content = abs_path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            if banned_launch_ref in content:
-                errors.append(
-                    f"Found deprecated launch reference '{banned_launch_ref}' in {rel}"
-                )
 
+def validate_launch_references(
+    repo_root: Path,
+    *,
+    tracked: list[str],
+    package_name: str,
+    errors: list[str],
+) -> None:
+    if not package_name:
+        return
+
+    banned_launch_ref = f"python -m {package_name}.main"
+    for rel in tracked:
+        if to_suffix(rel) not in TEXT_SUFFIXES:
+            continue
+        abs_path = repo_root / rel
+        try:
+            content = abs_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if banned_launch_ref in content:
+            errors.append(
+                f"Found deprecated launch reference '{banned_launch_ref}' in {rel}"
+            )
+
+
+def validate_text_file_policies(
+    repo_root: Path,
+    *,
+    tracked: list[str],
+    eol_lines: list[str],
+    errors: list[str],
+) -> None:
     gitattributes_path = repo_root / ".gitattributes"
     if gitattributes_path.exists():
         content = gitattributes_path.read_text(encoding="utf-8", errors="ignore")
@@ -805,23 +890,15 @@ def main() -> int:
 
     for line in eol_lines:
         meta, _, rel = line.partition("\t")
-        if not rel:
-            continue
-        if to_suffix(rel) not in TEXT_SUFFIXES:
-            continue
-        if "w/crlf" in meta:
+        if rel and to_suffix(rel) in TEXT_SUFFIXES and "w/crlf" in meta:
             errors.append(f"CRLF line ending detected in tracked text file: {rel}")
 
     for rel in tracked:
-        if to_suffix(rel) not in TEXT_SUFFIXES:
-            continue
-        if has_utf8_bom(repo_root / rel):
+        if to_suffix(rel) in TEXT_SUFFIXES and has_utf8_bom(repo_root / rel):
             errors.append(f"UTF-8 BOM is not allowed in tracked text file: {rel}")
 
-    collect_silent_broad_exception_warnings(repo_root, tracked, warnings)
-    collect_structure_size_guidance(repo_root, tracked, warnings)
-    collect_docstring_guidance(repo_root, tracked, warnings)
 
+def print_policy_results(errors: list[str], warnings: list[str]) -> int:
     if errors:
         print("Project policy check failed with the following issues:", file=sys.stderr)
         for issue in errors:
@@ -841,6 +918,84 @@ def main() -> int:
 
     print("Project policy check passed.")
     return 0
+
+
+def main() -> int:
+    repo_root = Path(__file__).resolve().parents[2]
+    errors: list[str] = []
+    warnings: list[str] = []
+    project_kind = load_project_kind(repo_root)
+
+    try:
+        tracked = tracked_files(repo_root)
+        eol_lines = tracked_eol_lines(repo_root)
+    except RuntimeError as exc:
+        print(
+            f"Policy check failed: unable to inspect git-tracked files ({exc}).",
+            file=sys.stderr,
+        )
+        return 1
+
+    tracked_set = set(tracked)
+    package_name = resolve_package_name(collect_src_packages(repo_root / "src"), errors)
+
+    pyproject = load_pyproject(repo_root, errors)
+    if pyproject:
+        validate_pyproject_policy(
+            pyproject,
+            project_kind=project_kind,
+            errors=errors,
+        )
+
+    validate_required_paths(
+        repo_root,
+        tracked_set=tracked_set,
+        project_kind=project_kind,
+        errors=errors,
+    )
+    validate_test_layout(
+        repo_root,
+        project_kind=project_kind,
+        errors=errors,
+    )
+    validate_package_contracts(
+        repo_root,
+        tracked=tracked,
+        tracked_set=tracked_set,
+        package_name=package_name,
+        project_kind=project_kind,
+        errors=errors,
+    )
+    validate_legacy_configs(
+        tracked,
+        tracked_set=tracked_set,
+        errors=errors,
+    )
+    validate_python_paths(
+        repo_root,
+        tracked=tracked,
+        package_name=package_name,
+        project_kind=project_kind,
+        warnings=warnings,
+        errors=errors,
+    )
+    validate_launch_references(
+        repo_root,
+        tracked=tracked,
+        package_name=package_name,
+        errors=errors,
+    )
+    validate_text_file_policies(
+        repo_root,
+        tracked=tracked,
+        eol_lines=eol_lines,
+        errors=errors,
+    )
+
+    collect_silent_broad_exception_warnings(repo_root, tracked, warnings)
+    collect_structure_size_guidance(repo_root, tracked, warnings)
+    collect_docstring_guidance(repo_root, tracked, warnings)
+    return print_policy_results(errors, warnings)
 
 
 if __name__ == "__main__":
